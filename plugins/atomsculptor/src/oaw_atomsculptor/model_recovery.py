@@ -51,9 +51,9 @@ def bounded_output_model(model: Any, trace: Any, role: str, evidence: Any,
             while True:
                 responses = []
                 action_mode = evidence.actions.enabled(evidence, role)
-                # Recovery use is a Run budget, not a mode for all future calls.
-                # Completing an action ends this request's recovery. A retry
-                # must also have at least the ordinary reasoning allowance.
+                # Recovery allowance applies only to this request, never later
+                # actions. A retry retains at least the ordinary reasoning time.
+                # The cumulative action recovery count is telemetry, not a fuse.
                 seconds = (max(evidence.limits.model_action_seconds, evidence.limits.action_recovery_seconds)
                            if recovering_action else evidence.limits.model_action_seconds) if action_mode else None
                 deadline = asyncio.timeout(seconds)
@@ -110,20 +110,38 @@ def bounded_output_model(model: Any, trace: Any, role: str, evidence: Any,
                             evidence.after_model(response)
                             if not timed_out:
                                 await trace.callbacks(role)["after_model_callback"](None, response)
-                        if evidence.actions.recoveries:
-                            evidence.stop("Builder made no permitted executable action (" +
-                                          ("request_deadline" if timed_out else "dependent_tool_batch" if dependent_batch else "disallowed_tool" if disallowed else "no_tool_action") +
-                                          ") after the bounded action recovery; "
-                                          "current stage=" + evidence.workflow.current)
-                        evidence.actions.recoveries = 1
+                        reason = ("request_deadline" if timed_out else "non_readonly_tool_batch" if dependent_batch
+                                  else "disallowed_tool" if disallowed else "no_tool_action")
+                        messages = {
+                            "request_deadline": "The model response exceeded this request's hard ceiling; no calls were dispatched.",
+                            "non_readonly_tool_batch": "A state-changing or unknown tool call must be submitted alone. Only read-only calls may be batched; no calls in this response were dispatched.",
+                            "disallowed_tool": "A proposed tool is unavailable in the current host state. Select from the current authorized tools.",
+                            "no_tool_action": "This stage needs an authorized tool action or an actual blocker reported through finish_task.",
+                        }
+                        rejected = evidence.workflow.error(reason, messages[reason])
+                        proposed = [p.function_call for p in parts if getattr(p, "function_call", None)]
+                        rejected["error"]["calls"] = [{"call_id": c.id, "tool": c.name} for c in proposed]
+                        if disallowed:
+                            rejected["error"]["allowed_tools"] = sorted(evidence.actions.allowed)
+                        if timed_out:
+                            if recovering_action:
+                                evidence.stop("Builder made no permitted executable action (request_deadline) "
+                                              "after the bounded action recovery; current stage=" + evidence.workflow.current)
+                        else:
+                            # Reuse the native unchanged-rejection detector. Call IDs
+                            # change on retries; tool semantics/arguments and host facts
+                            # identify the action that has actually received feedback.
+                            evidence.record_rejection(role, "model_response", {"calls": [
+                                {"tool": evidence.semantic_tool(c.name), "arguments": c.args} for c in proposed]}, rejected)
+                            if evidence.block_reason:
+                                evidence.stop(evidence.block_reason)
+                        evidence.actions.recoveries += 1
                         recovering_action = True
-                        if truncated:
-                            evidence.output_recoveries[role] = 1
-                        evidence.notice(role, "Correcting the next executable action once; no tools replayed",
+                        evidence.notice(role, "Correcting the rejected response; no tools dispatched or replayed",
                             recovery_event="model_action_recovery", recovery_scope="model_response", retrying=True,
-                            reason="deadline" if timed_out else "dependent_tool_batch" if dependent_batch else "disallowed_tool" if disallowed else "no_tool_action")
+                            reason=reason, error=rejected["error"])
                         request.contents.append(bindings.types.Content(role="user", parts=[
-                            bindings.types.Part.from_text(text=evidence.actions.recovery_instruction())]))
+                            bindings.types.Part.from_text(text=evidence.actions.recovery_instruction(rejected["error"]))]))
                         evidence.before_model(role, request, bindings, output_limit)
                         await trace.callbacks(role)["before_model_callback"](None, request)
                         continue

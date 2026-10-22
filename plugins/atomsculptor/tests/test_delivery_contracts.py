@@ -340,3 +340,44 @@ async def test_unknown_native_replacement_blocks_both_structure_write_paths():
         rejected = await tool(e, name, {'target': 'structure', 'expected_revision': 2}, {'revision': 3}, call_id='retry')
         assert rejected['error']['code'] == 'delivery_import_unknown'
     assert not e.imports and not e.confirmed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['same', 'omitted', 'parameters', 'skill', 'environment', 'candidate'])
+async def test_delivery_reuses_only_the_same_validation_identity(change):
+    from oaw_atomsculptor.delivery import validation_identity
+    e, definitions, invoke, stopped, calls = await delivery_setup()
+    checks = {'expected_count': 80, 'nonperiodic': True, 'min_vacuum': 8.0}
+    argv = _validate_argv('cnt.extxyz', checks)
+    e._observe_skill('structure_builder', {'sandbox': 'box', 'skill': 'skill',
+        'script': 'scripts/structure_inspect.py', 'argv': argv},
+        {'exit_code': 0, 'command_id': 'prior-validation', 'stdout': '{"passed": true, "file": "cnt.extxyz"}'})
+    args = dict(call_id='delivery', sandbox='box', skill='skill', structure_path='cnt.extxyz', target='structure')
+    requested = dict(checks)
+    if change == 'same':
+        requested.update(nonperiodic='true', min_vacuum=8)  # CLI-equivalent spelling.
+    if change == 'omitted':
+        requested = None
+    if change == 'parameters':
+        requested['min_vacuum'] = 9
+    if change == 'skill':
+        args['skill'] = 'another-skill'
+    if change == 'environment':
+        e.environment_revisions['box'] = 1
+    if change == 'candidate':
+        e._invalidate_file('box', 'cnt.extxyz', 'written')
+    result = await run_delivery_step(e, definitions, invoke, stopped, **args, validate=requested)
+    assert result['ok'], result
+    validations = [a for name, a in calls if name == 'run_skill_script' and a['argv'][0] == 'validate_structure']
+    assert len(validations) == (0 if change in {'same', 'omitted'} else 1)
+    assert result['steps'][0]['receipt_reused'] == (change in {'same', 'omitted'})
+    assert sum(name == 'import_atom_structure_file' for name, _ in calls) == 1
+
+
+def test_validation_identity_normalizes_defaults_and_does_not_cache_mutable_rules_file():
+    from oaw_atomsculptor.delivery import validation_identity
+    def identity(checks):
+        return validation_identity({'script': 'scripts/structure_inspect.py', 'skill': 'skill',
+                                    'argv': _validate_argv('candidate.extxyz', checks)}, 0)
+    assert identity({}) == identity({'min_distance': 0.1, 'nonperiodic': False, 'distance_mode': 'auto'})
+    assert identity({'region_checks_file': 'rules.json'}) is None

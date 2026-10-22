@@ -17,6 +17,7 @@ from open_agent_world.plugin_api.model_runtime import (
 )
 from .operation_request import parse_operation_request
 from .harness import HarnessLimits, RunEvidence, HarnessStopped
+from .actions import SERIAL_ACTION_INSTRUCTION
 from open_agent_world.plugin_api import (
     AgentConfig,
     AgentConfigurationError,
@@ -36,8 +37,10 @@ Prefer the equipped skill toolbox when available unless the user selects another
 authorized toolbox. Keep its exact selector when sources or versions overlap.
 For a typed Structure-panel operation with a known implementation, delegate directly
 to structure_builder; for Materials Project lookup, delegate to materials_project.
-Use planner first for free-form/custom modelling, even when all numeric parameters
-are specified. The HOST modelling_workflow.required flag is authoritative. A complex
+Use planner first for free-form/custom modelling when HOST has no committed plan,
+even when all numeric parameters are specified. On explicit continuation, reuse the
+restored HOST plan and current stage; call Planner again only for a HOST review_request.
+The HOST modelling_workflow.required flag is authoritative. A complex
 junction has an unresolved construction algorithm despite complete dimensions.
 Planner returns a short build/deliver plan, with an initial probe only when a
 missing input prevents construction; then delegate it with the original request
@@ -97,6 +100,9 @@ also accepted. Do not manually escape JSON inside JSON:
 the original request. Use build, deliver by default. Prepend a probe stage only
 when a specific missing input prevents the first construction step; it uses
 experiment.scope=input_measurement and a saved script with a finite stop condition.
+Recovery inventory uses native receipts, list_sandbox_files and read_sandbox_file; it is not a scientific
+probe or a reason to add checker controls. With no reusable candidate, plan the remaining construction
+from the original task. A probe is for a missing scientific input, not a generic restart ritual.
 Standard generator dimensions, counts and invariants can be measured by the
 construction script; they do not require a separate proof or calibration task.
 HOST modelling_workflow.plan_limits contains the exact character/count bounds,
@@ -112,7 +118,11 @@ derived numbers while building. Do not add an input probe merely because a
 derived value has not yet been printed.
 All original acceptance checks remain in build/deliver; none are dropped.
 Name each script artifact, the question it answers,
-its concrete method and a finite stop condition. Keep algorithm assumptions separate
+its concrete method and a finite stop condition. Stage checks describe final acceptance;
+the current experiment describes only the next executable result. For a complex
+method, choose a useful saved construction intermediate whose measured result
+informs the next action. It need not satisfy every stage check. Do not require
+all design uncertainties to be solved before saving and executing that step. Keep algorithm assumptions separate
 from user constraints; inferred thresholds are exploratory, not authoritative acceptance.
 Choose one construction/analysis approach and put its method in the stage goals.
 Identify concrete unknowns to compute and measurements to inspect. Do not merely
@@ -239,7 +249,11 @@ Use the equipped authorized toolbox and its exact source selector. Read relevant
 Skill instructions and file metadata first, with include_file_contents=false;
 load a specific source file by file_path only when needed. The inspection Skill
 ID is `structure-inspect`, never `structure_inspect`. Use read_tool_result for
-bounded slices of archived tool results and read_modelling_source for saved code.
+bounded slices of archived tool results and read_modelling_source for current saved
+code. Locate a needed region with query, symbol or start_line/end_line before
+paging through a whole file. The returned raw text can be copied into exact edits.
+HOST working_decision.retrieval_progress reports duplicate reads of already visible
+content; use the evidence or identify the specific missing fact before rereading.
 
 Work toward the requested deliverable: choose a concrete construction method,
 execute it and produce a first candidate early. HOST working_decision contains
@@ -271,16 +285,17 @@ can resume retained unexecuted code after a rejected execution field; correct th
 listed field rather than resubmitting the whole program. A source patch is not
 an execution receipt. Never edit running work or replay an unknown operation.
 
-Use one dependent action per response: ADK can run separate tool calls in parallel.
+""" + SERIAL_ACTION_INSTRUCTION + """
 The modelling/delivery composites sequence their dependent native operations.
-Independent reads may run together. For code outside composites, save through
+For code outside composites, save through
 write_sandbox_text_file, then execute direct python3 with that saved path. Small
-python3 -c input measurements are allowed; full programs and shell heredocs are
-not. Commands automatically prepare the Pack's declared modelling environment
-inside the selected Sandbox. Sandbox inspection describes its base interpreter,
-not the private profile's installed libraries; use command results as evidence.
-If preparation fails, do not probe for system Python; report its actual error
-and any returned log path, never invent one. Start a stopped Sandbox through
+python3 -c checks are allowed for one-off input/API inspection; reusable calculations
+use saved scripts in every stage. Inline results remain exploratory native receipts
+and cannot replace the saved experiment. Full programs and shell heredocs are not allowed. Base modelling and core Skills use OAW's host-prepared shared Sandbox Python;
+Sandbox inspection reports its installed package versions. Extra Skill dependency
+profiles may be private and are prepared by OAW on use. If preparation fails,
+do not probe for system Python; report the actual environment error and any
+returned log path, never invent one. Start a stopped Sandbox through
 its authorized tool. A running receipt needs native wait, not another model scan.
 timeout_seconds is a command deadline; wait_seconds is a collection interval.
 Null HOST time_budget values mean no total Run deadline, not zero time. Keep
@@ -704,13 +719,32 @@ def _trim_specialist_history(bindings: Any, trace: _ModelTrace, role: str,
 
 
 
+def _specialist_task_prompt(request: Any, fallback: str, *, user_content: Any = None) -> str:
+    """Use the invocation's user input, never reasoning or a tool observation."""
+    contents = getattr(request, "contents", None) or ()
+    content = user_content if user_content is not None else contents[0] if contents else None
+    if getattr(content, "role", None) != "user":
+        return fallback
+    parts = getattr(content, "parts", None) or ()
+    if any(getattr(part, "function_response", None) is not None or
+           getattr(part, "function_call", None) is not None for part in parts):
+        return fallback
+    text = "\n".join(part.text for part in parts if not getattr(part, "thought", False)
+                     and not getattr(part, "thought_signature", None)
+                     and isinstance(getattr(part, "text", None), str))
+    return text if text.strip() else fallback
+
+
 def _model_callbacks(trace: _ModelTrace, role: str, managed: Any | None, bindings: Any = None,
                      completed_results: Mapping[str, tuple[str, Any]] | None = None,
-                     evidence: RunEvidence | None = None, output_limit: int | None = None) -> dict[str, Any]:
+                     evidence: RunEvidence | None = None, output_limit: int | None = None,
+                     context_factory: Any = None) -> dict[str, Any]:
     traced = trace.callbacks(role)
 
     if managed is None:
+        active_context = None
         async def bare_before_model(callback_context: Any, llm_request: Any) -> Any | None:
+            nonlocal active_context
             window = trace.context_windows.get(role)
             if window is not None:
                 # ADK's public branch includes the originating delegation call
@@ -724,6 +758,17 @@ def _model_callbacks(trace: _ModelTrace, role: str, managed: Any | None, binding
             _repair_tool_exchange(bindings, trace, role, llm_request,
                                   completed_results=completed_results)
             _trim_specialist_history(bindings, trace, role, llm_request, evidence)
+            active_context = context_factory(role, llm_request,
+                user_content=getattr(callback_context, "user_content", None)) if context_factory is not None else None
+            if active_context is not None:
+                def transform(working):
+                    _trim_specialist_history(bindings, trace, role, working, evidence)
+                    if evidence is not None:
+                        evidence.clear_host_frames(working, bindings)
+                await active_context.before_model(callback_context, llm_request,
+                    working_transform=transform)
+                _repair_tool_exchange(bindings, trace, role, llm_request,
+                                      completed_results=completed_results)
             if evidence is not None:
                 evidence.before_model(role, llm_request, bindings, output_limit)
             await trace.callbacks(role, prepare_only=window is not None)["before_model_callback"](callback_context, llm_request)
@@ -731,6 +776,8 @@ def _model_callbacks(trace: _ModelTrace, role: str, managed: Any | None, binding
         async def bare_after_model(callback_context: Any, llm_response: Any) -> None:
             if evidence is not None:
                 evidence.after_model(llm_response)
+            if active_context is not None:
+                await active_context.after_model(callback_context, llm_response)
             await traced["after_model_callback"](callback_context, llm_response)
 
         return {"before_model_callback": bare_before_model,
@@ -1037,6 +1084,16 @@ class AtomSculptorRuntime(RuntimeProvider):
                 selection_snapshot=selection_context,
                 direct_builder=config.provider_config.get("execution_mode") == "builder")
             evidence.trace = model_trace
+            if _evidence is None:
+                source_run_id = (getattr(context, "extensions", None) or {}).get("continuation_run_id")
+                if source_run_id and self.reasoning_store is not None:
+                    from open_agent_world.plugin_api import NotFoundError
+                    try:
+                        scope = self.reasoning_store.get_scope("run", source_run_id)
+                        checkpoint = self.reasoning_store.get(scope, "execution_checkpoint")
+                    except NotFoundError:
+                        checkpoint = None
+                    evidence.restore_continuation(checkpoint, source_run_id)
             evidence.configure_tools(available_tools)
             if evidence.workflow.required:
                 async def advance_modelling_stage(stage: str, sandbox: str = "", script_path: str = "",
@@ -1094,28 +1151,48 @@ class AtomSculptorRuntime(RuntimeProvider):
                 reducer=getattr(managed.get(role), "reduce_final_request", None),
                 capabilities=ContextCapabilities.for_model(model))
                 for role in ("atom_sculptor", "planner", "structure_builder", "materials_project")}
-            def protected_frame(content):
-                return any(getattr(part, "text", None) in evidence._host_static_texts | evidence._host_evidence_texts
-                           for part in (content.parts or []))
-            async def reduce_role(request, role):
+            builder_role = "atom_sculptor" if evidence.direct_builder else "structure_builder"
+            windows[builder_role].register_bounded_reader("read_modelling_source",
+                identity_fields=("sandbox", "path", "version"))
+            specialist_contexts = {}
+            def role_context(role, request, *, user_content=None):
                 from open_agent_world.plugin_api.model_runtime import ManagedContext
                 import hashlib
                 manager = managed.get(role)
                 if manager is None:
                     if self.context_store is None:
-                        raise AgentRuntimeError("No native context store is available for specialist compaction")
+                        return None
+                    key = (role, windows[role].scope)
+                    if key in specialist_contexts:
+                        return specialist_contexts[key]
                     # The scope is specific to this Run and initial delegation.
                     # Only the passed request is reduced; old role histories are
                     # never merged into a different assignment.
                     scope = f"{context.context_id or 'default'}#atomsculptor:{context.run_id}:{role}:" + hashlib.sha256(windows[role].scope.encode()).hexdigest()[:16]
                     selected = bindings.LLMRegistry.new_llm(model) if isinstance(model, str) else model
-                    prompt = "\n".join(p.text for p in request.contents[0].parts if p.text) if request.contents else evidence.original_request
+                    prompt = _specialist_task_prompt(request, evidence.original_request, user_content=user_content)
                     manager = ManagedContext(self.context_store, config.agent_id, scope, context.run_id,
                         selected, prompt, budget=self._context_budget(config, model, bindings))
+                    # The existing specialist tail policy runs before native
+                    # ingestion and again on its working checkpoint. Keep that
+                    # bounded tail in memory; native archives own full thoughts.
+                    manager.preserve_reasoning = True
                     manager.trace, manager.trace_role = model_trace, role
                     manager.retry_policy = evidence.limits.request_recovery
                     manager.on_compaction_response = evidence.after_model
-                await manager.reduce_final_request(request, protected=protected_frame)
+                    specialist_contexts[key] = manager
+                return manager
+            async def reduce_role(request, role):
+                manager = role_context(role, request)
+                if manager is None:
+                    raise AgentRuntimeError("No native context store is available for specialist compaction")
+                # Use native token-budget compaction, preserving the newest
+                # explicit retrieval and its original call/response together.
+                # Do not maintain another plugin character-based history cut.
+                reads = {id(c) for c in windows[role].retrieval_context(request)}
+                await manager.reduce_final_request(request,
+                    protected=evidence.protected_context(request, windows[role]),
+                    retain_protected=lambda content: id(content) in reads)
             for role, window in windows.items():
                 async def reduce_request(request, selected_role=role):
                     await reduce_role(request, selected_role)
@@ -1133,7 +1210,8 @@ class AtomSculptorRuntime(RuntimeProvider):
             callbacks = {
                 role: _model_callbacks(model_trace, role, managed.get(role), bindings,
                                        completed_delegations if role == "atom_sculptor" else None,
-                                       evidence=evidence, output_limit=output_limit)
+                                       evidence=evidence, output_limit=output_limit,
+                                       context_factory=role_context if self.context_store is not None else None)
                 for role in ("atom_sculptor", "planner", "structure_builder", "materials_project")
             }
             callbacks["atom_sculptor"]["before_tool_callback"] = _delegation_guard(model_trace, evidence)

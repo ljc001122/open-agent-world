@@ -52,7 +52,8 @@ def _cli_parameters(command):
                     if isinstance(node, ast.FunctionDef) and node.name == command)
     count = len(function.args.args) - len(function.args.defaults)
     return {arg.arg: {"type": ast.unparse(arg.annotation).split(" | ")[0],
-                      "nullable": "None" in ast.unparse(arg.annotation), "required": i < count}
+                      "nullable": "None" in ast.unparse(arg.annotation), "required": i < count,
+                      **({"default": ast.literal_eval(function.args.defaults[i - count])} if i >= count else {})}
             for i, arg in enumerate(function.args.args)}
 
 
@@ -61,7 +62,7 @@ def validation_schema():
     return {"type": "object", "additionalProperties": False,
             "properties": {key: {"type": kinds[meta["type"]]} for key, meta in _cli_parameters("validate_structure").items()
                            if key not in {"folder", "file_name"}},
-            "description": "Optional acceptance parameters. Omit to reuse the build validation receipt. Use snake_case names; folder and file_name are supplied by the host from structure_path."}
+            "description": "Optional acceptance parameters. Omit or repeat identical parameters to reuse the current build validation receipt. Changed parameters require validation. Use snake_case names; folder and file_name are supplied by the host from structure_path."}
 
 
 def _skill_argv(command, values):
@@ -107,6 +108,63 @@ def _validate_argv(structure_path: str, validate: Mapping[str, Any] | None) -> l
     if issues:
         raise DeliveryArguments(issues)
     return _skill_argv("validate_structure", {**values, "folder": ".", "file_name": structure_path})
+
+
+def validation_identity(args, environment_revision):
+    """Normalize the existing validator invocation, without executing Skill code."""
+    argv = args.get("argv")
+    if args.get("script") != "scripts/structure_inspect.py" or not isinstance(argv, list) or not argv or argv[0] != "validate_structure":
+        return None
+    parameters = _cli_parameters("validate_structure")
+    if len(argv) % 2 != 1 or any(not isinstance(a, str) for a in argv):
+        return None
+    pairs = list(zip(argv[1::2], argv[2::2]))
+    if len({key for key, _ in pairs}) != len(pairs):
+        return None
+    values = {key: meta.get("default") for key, meta in parameters.items()}
+    for key, value in pairs:
+        key = key.removeprefix("--").replace("-", "_")
+        if key not in parameters:
+            return None
+        kind = parameters[key]["type"]
+        try:
+            if kind == "bool":
+                if value.lower() not in {"true", "false"}:
+                    return None
+                value = value.lower() == "true"
+            elif kind == "int":
+                value = int(value)
+            elif kind == "float":
+                value = float(value)
+                if not math.isfinite(value):
+                    return None
+        except (ValueError, OverflowError):
+            return None
+        values[key] = value
+    values.pop("folder", None)
+    values.pop("file_name", None)
+    # This extra file has mutable contents outside this candidate's receipt.
+    # Keep running validation until its own dependency identity is available.
+    if values.get("region_checks_file") is not None:
+        return None
+    return {"skill": args.get("skill"), "script": args["script"], "parameters": values,
+            "environment_revision": environment_revision}
+
+
+def reusable_validation(evidence, prior, sandbox, skill, argv, validate):
+    if not prior or prior.get("phase") != "validated":
+        return False
+    artifact = evidence.artifact_handoffs.get((sandbox, prior["path"]))
+    if artifact and prior.get("execution_sequence", -1) < artifact.get("execution_sequence", 0):
+        return False
+    known = prior.get("validation")
+    if known is None:
+        return validate is None and "validation" not in prior  # Legacy receipts lack invocation metadata.
+    requested = validation_identity({"skill": skill, "script": "scripts/structure_inspect.py", "argv": argv},
+                                    evidence.environment_revisions.get(sandbox, 0))
+    if requested is None or known.get("skill") != skill or known.get("environment_revision") != requested["environment_revision"]:
+        return False
+    return validate is None or known == requested
 
 
 def is_independent_validation(args, evidence):
@@ -183,9 +241,11 @@ def validation_step_function(evidence, definitions, invoke, stopped):
                 "command_dispatched": True, "message": "The Skill CLI rejected arguments before validation. Check the equipped/linked Skill and its declared parameters. Keep the structure unchanged."},
                 "validation": result}
         bound = report.get("file") == structure_path
-        return {"ok": bool(bound and payload.get("exit_code") == 0 and report.get("passed") is True),
-                "validation": result, "report": report, "artifact_bound": bound,
-                "next_action": "Use the independent measurements to assess the current execution or patch one failed check. Stage acceptance is unchanged."}
+        passed = bool(bound and payload.get("exit_code") == 0 and report.get("passed") is True)
+        next_action = (evidence.actions.next_action(evidence)[0] if passed else
+            "Use the independent measurements to assess the current execution or patch one failed check. Stage acceptance is unchanged.")
+        return {"ok": passed, "validation": result, "report": report, "artifact_bound": bound,
+                "next_action": next_action}
     return validate_modelling_artifact
 
 
@@ -278,7 +338,7 @@ async def run_delivery_step(evidence: Any, definitions: Any, invoke: Any, stoppe
     # Build already required independent validation. Reuse that receipt unless
     # explicit new parameters are requested; conversion uses the same input path.
     prior = evidence.outputs.get((sandbox, posixpath.normpath(structure_path)))
-    if validate is None and prior and prior.get("phase") == "validated":
+    if reusable_validation(evidence, prior, sandbox, skill, validation_argv, validate):
         report = prior["measurements"]
         validated = {"exit_code": 0, "receipt_reused": True}
     else:
@@ -354,6 +414,8 @@ def delivery_step_function(evidence: Any, definitions: Any, invoke: Any, stopped
         Each step checks the previous native receipt; a failure stops at its exact
         step and nothing later is dispatched. validate carries the Skill's explicit
         acceptance parameters (for example expected_count or min_vacuum).
+        output_name is a workspace-relative JSON filename ending in .json,
+        for example candidate.json, not a display title; omit it for the default.
         """
         return await run_delivery_step(evidence, definitions, invoke, stopped,
             call_id=tool_context.function_call_id, sandbox=sandbox, skill=skill,

@@ -37,8 +37,11 @@ offers `array`, `atoms`, `label_indices`, `json` and `receipt`. `constraint`,
 NumPy scalar values. Put controls inside constraints. Failed checks remain
 failed, and nonfinite values are rejected. `transform_points` requires the same
 explicit `frame.reference` in both coordinate systems; prefer saved labels.
-Use `read_modelling_source` with a script path and character offset/limit
-for repairs; it reads the last native-confirmed source snapshot without a command.
+Use `read_modelling_source` with a script path and `query`, Python `symbol`, or
+1-based `start_line`/`end_line` to locate a repair. Character `offset`/`limit`
+provide bounded continuation. It returns raw text, line positions and the current
+native-confirmed saved version without running a command; avoid rereading a whole
+unchanged file when the needed region is already visible.
 
 `emit_measurements` saves oversized ordinary diagnostics to `.oaw-reports/` in
 the Sandbox and emits bounded references. Scalar facts and scientific checks

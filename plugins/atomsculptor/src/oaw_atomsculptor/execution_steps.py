@@ -156,7 +156,8 @@ def workflow_argument_error(name, args):
             "validate_modelling_artifact": ({"sandbox", "skill", "structure_path"},
                 {"sandbox": "string", "skill": "string", "structure_path": "string", "checks": "object"}),
             "read_modelling_source": ({"sandbox", "script_path"},
-                {"sandbox": "string", "script_path": "string", "offset": "integer", "limit": "integer"})}
+                {"sandbox": "string", "script_path": "string", "offset": "integer", "limit": "integer",
+                 "start_line": "integer", "end_line": "integer", "query": "string", "symbol": "string"})}
         if name not in fields:
             return None
         required, properties = fields[name]
@@ -201,7 +202,7 @@ class ExecutionSteps:
             return None
         return {"module": self.helper_module,
                 "availability": "Staged beside the script by a native Sandbox write before the first modelling step in each Sandbox/script directory.",
-                "example": "from " + self.helper_module + " import load_inputs, constraint, artifact, emit_measurements, write_extxyz\ninputs = load_inputs()  # path-indexed HOST manifest, or empty when absent\n# inputs.array(path, dataset), inputs.atoms(path), inputs.label_indices(path, array, value)\n# inputs.receipt(path) carries units/frame/components/layout\n# write_extxyz(path, atoms): ASE serialization plus file round-trip, not acceptance\n# emit_measurements(values={'observed_count': n}, coverage={'atoms': n}, constraints=[constraint(name, passed, reason, regions=['atoms'])])",
+                "example": "from " + self.helper_module + " import load_inputs, constraint, artifact, emit_measurements, write_extxyz\ninputs = load_inputs()  # path-indexed HOST manifest, or empty when absent\n# inputs.array(path, dataset), inputs.atoms(path), inputs.label_indices(path, array, value)\n# inputs.receipt(path) carries units/frame/components/layout\n# write_extxyz(path, atoms): ASE serialization plus file round-trip, not acceptance\n# emit_measurements(values={'observed_count': n}, coverage={'atoms': n}, constraints=[constraint(name, passed, reason, regions=['atoms'])])\n# This defaults to diagnostic. For a build candidate, explicitly pass kind='candidate', measurement_revision,\n# executed constraints with HOST check_ids, actual inspected coverage, and artifacts for the saved candidate.\n# artifact paths are workspace-relative, even if the writer returned an absolute path.\n# See measurement_contract.candidate_example for the complete envelope; example values are not acceptance evidence.",
                 "usage": "Reuse these standard I/O/reporting helpers and write only the current calculation. Use write_extxyz instead of hand-written file headers; independent Skill validation remains required. The _oaw_modelling_* module itself is host staging machinery: import its API; never read, reprint or validate its source.",
                 "frames": "transform_points(points, source_frame, target_frame) requires identical frame.reference. Artifact.components are counts, not atom memberships: save actual per-atom component/region labels in NPZ/extxyz and consume them. Never guess indices or align unrelated coordinate frames.",
                 "relaxation": "Optional relax_structure(atoms, calculator=..., movable_indices=..., fmax=..., steps=..., optimizer='FIRE' or 'LBFGS', maxstep=None) reuses ASE on a copy, preserves constraints and fixes the complement. Caller supplies suitable physics/parameters and convergence criteria. Returns (atoms, report); convergence is not acceptance or proof of stability. Skip when relaxation is unnecessary.",
@@ -740,22 +741,22 @@ class ExecutionSteps:
                                      "Rerun this producer once emitting oaw_measurements artifact records for the "
                                      "files it writes (modelling_io emit_measurements/artifact), or the consuming "
                                      "subtask will be rejected with subtask_inputs.")
+            if record["state"] == "execution_unknown":
+                evidence.executions[f"{call_id}:unconfirmed_step"] = [
+                    ((sandbox, record["script_path"]), record["source_version"])]
+            from .measurements import constraint_failures
+            measured = evidence.measurement_reports.get(evidence.execution_sequence) if record["state"] == "finished" else None
+            issues = evidence.measurement_issues.get(evidence.execution_sequence, []) if record["state"] == "finished" else []
             answer = {"ok": record["state"] in {"finished", "running"} and record["exit_code"] in {None, 0},
                       "assessment_reused": assessment_reused,
                       "exit_code": record["exit_code"], "step": dict(record), "save": saved, "execution": result,
-                      "measurements": deepcopy(evidence.measurement_reports.get(evidence.execution_sequence)),
-                      "measurement_issues": deepcopy(evidence.measurement_issues.get(evidence.execution_sequence, [])),
-                      "next_action": ("Collect running/unknown execution first. For a justified next code action, include one brief "
-                                     "previous_assessment in that next step. Use standalone observe only for a stage decision, review or validation. Once recorded, omit previous_assessment "
-                                     "and execute the next bounded patch/experiment using the stored receipt. "
-                                     "A completed step does not prove the stage or task is complete. At a measured subgoal boundary, "
-                                     "assess with outcome=continue, then finish_task status=subtask_complete with one next_experiment "
-                                     "to continue in a fresh delegation. Keep local repairs in this delegation." + producer_hint)}
+                      "measurements": deepcopy(measured),
+                      "measurement_issues": deepcopy(issues),
+                      "constraint_failures": constraint_failures(measured or {}),
+                      "next_action": evidence.actions.next_action(evidence)[0] + producer_hint}
             if record["state"] == "execution_unknown":
                 # A returned tool error is not a command termination receipt.
                 # Keep uncertainty explicit rather than silently resubmitting.
-                evidence.executions[f"{call_id}:unconfirmed_step"] = [
-                    ((sandbox, record["script_path"]), record["source_version"])]
                 answer["error"] = {"code": "step_execution_unconfirmed", "message":
                     "No finished/running command receipt was confirmed. Inspect native Sandbox state; do not resubmit blindly.",
                     "kind": "execution_unknown", "command_dispatched": None}
@@ -768,9 +769,22 @@ class ExecutionSteps:
 
 
 def source_reader_function(evidence):
+    def error(code, message, **details):
+        return {"ok": False, "error": {"code": code, "message": message, **details}}
+
     async def read_modelling_source(sandbox: str, script_path: str,
-                                    offset: int = 0, limit: int = 4000) -> dict:
-        """Read a native-confirmed source snapshot from this Run. Offset/limit are characters; no command runs."""
+                                    offset: int = 0, limit: int = 4000,
+                                    start_line: int | None = None, end_line: int | None = None,
+                                    query: str | None = None, symbol: str | None = None) -> dict:
+        """Read current native-confirmed code without executing it.
+
+        Choose character offset, 1-based start_line/end_line, a literal query,
+        or an exact Python symbol (e.g. Class.method). limit always bounds text
+        to 1..8000 characters. Returned text is raw source suitable for edits;
+        positions and version are metadata. Continue a page with next_offset
+        and omit the selector. Prefer locating the needed region to rereading
+        the whole file. This reads saved bytes, not the first submitted source.
+        """
         key = (sandbox, script_path)
         item, source = evidence.scripts.get(key), evidence.script_sources.get(key)
         if not item or source is None:
@@ -782,16 +796,77 @@ def source_reader_function(evidence):
             if script_path.startswith("_oaw_modelling_"):
                 hint += (" The _oaw_modelling_* module is host staging machinery: import its documented API "
                          "(load_inputs/emit_measurements/write_extxyz); its source is not a modelling artifact.")
-            return {"ok": False, "error": {"code": "source_snapshot",
-                "message": "Use the path of an available native-confirmed source in this Run. " + hint,
-                "available_paths": available}}
+            return error("source_snapshot", "Use the path of an available native-confirmed source in this Run. " + hint,
+                         available_paths=available)
         # Match the existing OAW archived tool-result reader's paging limit.
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 8000:
-            return {"ok": False, "error": {"code": "source_range", "message": "Use nonnegative offset and limit 1..8000 characters."}}
-        end = min(len(source), offset + limit)
-        return {"ok": True, "sandbox": sandbox, "path": script_path,
+            return error("source_range", "Use nonnegative offset and limit 1..8000 characters.")
+        if offset > len(source):
+            return error("source_range", "Offset is beyond this snapshot; use total_chars or a line/query/symbol selector.",
+                         total_chars=len(source))
+        selectors = sum(x is not None for x in (start_line, query, symbol))
+        if selectors > 1 or selectors and offset != 0 or end_line is not None and start_line is None:
+            return error("source_selector", "Choose offset OR start_line[/end_line] OR query OR symbol. Continue with next_offset only.")
+        import ast
+        from bisect import bisect_right
+        starts = [0] + [i + 1 for i, ch in enumerate(source) if ch == "\n" and i + 1 < len(source)]
+        selected_end, details = len(source), {}
+        if start_line is not None:
+            if (type(start_line) is not int or not 1 <= start_line <= len(starts)
+                    or end_line is not None and (type(end_line) is not int or not start_line <= end_line <= len(starts))):
+                return error("source_range", "Use 1-based inclusive lines within this snapshot.", total_lines=len(starts))
+            offset = starts[start_line - 1]
+            if end_line is not None and end_line < len(starts):
+                selected_end = starts[end_line]
+        elif query is not None:
+            if not isinstance(query, str) or not query or len(query) > 256:
+                return error("source_query", "Use a nonempty literal query of at most 256 characters.")
+            positions, cursor = [], 0
+            # Bounded locations, not an unbounded result or a second index.
+            while len(positions) < 21:
+                found = source.find(query, cursor)
+                if found < 0:
+                    break
+                positions.append(found)
+                cursor = found + len(query)
+            if not positions:
+                return error("source_query", "Literal text not found in this snapshot; choose another query or symbol.", version=item.version)
+            details = {"matches": [{"offset": p, "line": bisect_right(starts, p)} for p in positions[:20]],
+                       "more_matches": len(positions) > 20}
+            offset = starts[max(0, bisect_right(starts, positions[0]) - 3)]
+        elif symbol is not None:
+            if not isinstance(symbol, str) or not symbol or len(symbol) > 256:
+                return error("source_symbol", "Use an exact Python function or class name, optionally qualified as Class.method.")
+            try:
+                tree = ast.parse(source)
+            except (SyntaxError, ValueError, RecursionError) as exc:
+                return error("source_symbol", "This snapshot cannot be parsed; locate the error with start_line or a literal query.",
+                             line=getattr(exc, "lineno", None), version=item.version)
+            symbols = []
+            def visit(node, prefix=""):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    name = prefix + node.name
+                    symbols.append((name, node))
+                    prefix = name + "."
+                for child in ast.iter_child_nodes(node):
+                    visit(child, prefix)
+            visit(tree)
+            matches = [(name, node) for name, node in symbols if name == symbol or node.name == symbol]
+            if len(matches) != 1:
+                return error("source_symbol", "Choose one exact, unambiguous symbol from this snapshot.",
+                             matches=[name for name, _ in matches[:20]], available_symbols=[name for name, _ in symbols[:20]],
+                             version=item.version)
+            name, node = matches[0]
+            first_line = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            offset = starts[first_line - 1]
+            selected_end = starts[node.end_lineno] if node.end_lineno < len(starts) else len(source)
+            details["symbol"] = name
+        end = min(selected_end, offset + limit)
+        return {"ok": True, "sandbox": sandbox, "path": script_path, "version": item.version,
                 "source": "last native-confirmed saved snapshot, not a live disk read", "text": source[offset:end],
-                "offset": offset, "total_chars": len(source), "next_offset": end if end < len(source) else None}
+                "offset": offset, "total_chars": len(source), "next_offset": end if end < selected_end else None,
+                "start_line": bisect_right(starts, offset), "end_line": bisect_right(starts, max(offset, end - 1)),
+                "total_lines": len(starts), **details}
     return read_modelling_source
 
 

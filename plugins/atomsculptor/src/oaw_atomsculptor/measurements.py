@@ -197,7 +197,21 @@ class Measurement(Contract):
 
 def measurement_contract():
     """Generated from exactly the same types used by the stdout parser."""
+    candidate_example = Measurement.model_validate({"kind": "candidate", "measurement_revision": "example-v1",
+        "coverage": {"inspected_entries": 4},
+        "constraints": [{"name": "example_requirement", "passed": False,
+            "reason": "Illustrative failed verdict; replace with actual executed measurements.",
+            "regions": ["inspected_entries"], "check_ids": ["<HOST build requirement ID>"]}],
+        "artifacts": [{"path": "candidate.npz", "units": "angstrom", "components": {"component_a": 4},
+            "frame": {"origin": [0, 0, 0], "axes": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]},
+            "layout": {"format": "npz", "primary_dataset": "positions"}}]})
     return {"schema": Measurement.model_json_schema(),
+            "candidate_example": {"oaw_measurements": candidate_example.model_dump(exclude_defaults=True)},
+            "report_kinds": "emit_measurements defaults to diagnostic: useful intermediate evidence, not build completion. "
+                "A build candidate needs explicit kind=candidate, measurement_revision, measured constraints with the "
+                "actual HOST check_ids and inspected coverage. File/document delivery also needs the actual saved file "
+                "in artifacts and structure_path when advancing. The example is a shape illustration, not a verdict, "
+                "coordinate frame or requirement ID to copy; preserve actual failures and independent validation.",
             "data_limits": DATA_LIMITS.copy(),
             "encoding": 'Print ONE line: OAW_MEASUREMENTS {"oaw_measurements": <schema object>}. A marked bare object is also accepted.',
             "example": {"oaw_measurements": {"schema_version": 1, "kind": "diagnostic",
@@ -209,9 +223,23 @@ def measurement_contract():
                 "An empty tested population cannot prove a check. Record actual sample_count, search scope/range and untested hypotheses in metadata; a sample verdict does not prove an unexecuted search."}
 
 
+def coverage_issue(name, count, check_ids=()):
+    return {"name": "coverage:" + name, "passed": False,
+            "code": "population_not_reported" if count is None else "empty_test_population",
+            "field": "oaw_measurements.coverage." + name, "check_ids": list(check_ids),
+            "reason": "No inspected population was reported for this region." if count is None else
+                "No samples were measured in this declared region.",
+            "next_action": "For an absence check, report the actual inspected directory/entry population in coverage "
+                "and found_matches=0 in values, with the search scope in metadata. For a property check, no tested "
+                "objects means the property remains untested. Do not mark it passed or create synthetic objects to "
+                "prove properties of absent candidates; request plan review if the committed conditional check "
+                "does not apply to the observed state. Existing acceptance checks remain unchanged."}
+
+
 def constraint_failures(value):
     failures = [c for c in value.get("constraints", []) if not c["passed"]]
-    failures += [{"name": "coverage:" + name, "passed": False, "reason": "No samples were measured in this declared region."}
+    failures += [coverage_issue(name, count, [identity for c in value.get("constraints", [])
+                    if name in c.get("regions", []) for identity in c.get("check_ids", [])])
                  for name,count in value.get("coverage",{}).items() if count == 0]
     failures += [{"name": "control:" + c["name"] + ":" + control["name"], "passed": False,
                   "reason": "The checker did not reproduce its expected control verdict."}

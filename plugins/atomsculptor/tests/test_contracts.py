@@ -280,8 +280,12 @@ class StructureContractTests(unittest.TestCase):
         from google.genai import types as genai_types
         from backend.persistence.database import Database
         from backend.runs.store import RunStore
+        from backend.plugins import create_builtin_registry
+        from backend.world.models import CardCreate
+        from backend.world.store import WorldStore
 
         database = Database(":memory:")
+        WorldStore(database, create_builtin_registry()).create_card(CardCreate(type="agent", name="Atom"), card_id="agent")
         run = RunStore(database).create(agent_id="agent", runtime_provider_id="atomsculptor.adk-team",
                                         caller_kind="user")
         calls = 0
@@ -304,16 +308,17 @@ class StructureContractTests(unittest.TestCase):
                 async def stream():
                     nonlocal calls
                     calls += 1
-                    request = SimpleNamespace(contents=[SimpleNamespace(model_dump=lambda **_opts: {
-                        "role": "user", "parts": [{"text": "Build a small structure"}],
-                    })], config=SimpleNamespace(max_output_tokens=None))
+                    from google.adk.models.llm_request import LlmRequest
+                    request = LlmRequest(contents=[genai_types.Content(role="user",
+                        parts=[genai_types.Part(text="Build a small structure")])],
+                        config=genai_types.GenerateContentConfig())
                     callbacks = self.callbacks["atom_sculptor"]
                     await callbacks["before_model_callback"](None, request)
                     if calls == 1:
                         yield SimpleNamespace(author="atom_sculptor", partial=True,
                                               content=SimpleNamespace(parts=[SimpleNamespace(thought=True, text="thinking")]))
                         raise ConnectionResetError("stream dropped")
-                    answer = SimpleNamespace(parts=[SimpleNamespace(thought=False, text="Done")])
+                    answer = genai_types.Content(role="model", parts=[genai_types.Part(text="Done")])
                     await callbacks["after_model_callback"](None, SimpleNamespace(
                         partial=False, content=answer, usage_metadata=None,
                         finish_reason=None, error_code=None,
@@ -326,24 +331,24 @@ class StructureContractTests(unittest.TestCase):
             async def list_tools(self, _agent_id):
                 return []
 
+        from backend.agents.context import ContextStore
+        from backend.events.hub import EventHub
         runtime = AtomSculptorRuntime(Capabilities(), model_connection_resolver=SimpleNamespace(
             resolve_runtime=lambda _model: SimpleNamespace(supports_images=True, api_key=None),
-        ), context_store=SimpleNamespace(database=database))
+        ), context_store=ContextStore(database, EventHub()))
         bindings = SimpleNamespace(
             Runner=Runner, App=lambda **values: SimpleNamespace(**values),
             types=genai_types,
         )
         run_config = SimpleNamespace(RunConfig=lambda **values: SimpleNamespace(**values),
                                      StreamingMode=SimpleNamespace(SSE="SSE"))
-        modules = {name: SimpleNamespace() for name in ("google", "google.adk", "google.adk.agents")}
-        modules["google.adk.agents.run_config"] = run_config
-        modules["google.adk.tools"] = SimpleNamespace(FunctionTool=lambda function: function)
+        modules = {"google.adk.agents.run_config": run_config}
 
         async def exercise():
             with patch.dict(sys.modules, modules), \
                  patch.object(runtime, "get_agent", new=AsyncMock()), \
                  patch.object(runtime, "_bindings", return_value=bindings), \
-                 patch.object(runtime, "_model", return_value=object()), \
+                 patch.object(runtime, "_model", return_value=SimpleNamespace(model="offline/fixture")), \
                  patch.object(runtime, "_session_service", return_value=sessions), \
                  patch.object(runtime, "_session", new=AsyncMock(return_value="session")), \
                  patch.object(runtime, "_selection_context", new=AsyncMock(return_value=[])), \

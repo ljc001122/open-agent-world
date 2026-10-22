@@ -7,8 +7,15 @@ from open_agent_world.plugin_api.tool_execution import collect_operation_result,
 from open_agent_world.plugin_api.sandbox import python_entrypoint
 
 
+SERIAL_ACTION_INSTRUCTION = (
+    "Each response may contain one tool call, or multiple read-only calls. "
+    "A call that may change state must be the only tool call in its response, "
+    "even when targets or output files differ. Unknown operations also require a single-call response."
+)
+
+
 READ_DEPENDENCIES = {"read_tool_result", "read_modelling_source", "read_skill", "read_skills", "preview_file", "inspect_artifacts", "list_resources",
-                     "list_toolbox_members", "inspect_sandbox", "inspect_atom_structure", "observe_atom_structure"}
+                     "list_toolbox_members", "inspect_sandbox", "list_sandbox_files", "read_sandbox_file", "inspect_atom_structure", "observe_atom_structure"}
 
 
 def inline_python(argv):
@@ -137,6 +144,31 @@ class ExecutionActions:
                     "in run_modelling_step; the host advances the checkpoint before executing it. "
                     "Use the existing receipt; construction is the next stage. Do not add another input verifier or remeasure these facts.",
                     exits | {"run_modelling_step"})
+        ready = workflow.ready_execution(evidence)
+        if ready is not None:
+            measured = evidence.measurement_reports.get(ready.execution_sequence, {})
+            paths = workflow.execution_artifact_paths(evidence, ready)
+            if not paths and not workflow.uses_measurement_contract(evidence):
+                paths = [path for (box, path), output in evidence.outputs.items()
+                         if box == ready.sandbox and output.get("phase") == "validated"
+                         and output.get("execution_sequence", -1) >= ready.execution_sequence]
+            structure_path = paths[0] if len(paths) == 1 else ""
+            checked = workflow.experiment_checkpoint(evidence, workflow.current, ready.sandbox, ready.path, structure_path)
+            arguments = {"stage": workflow.current, "sandbox": ready.sandbox, "script_path": ready.path}
+            if structure_path:
+                arguments["structure_path"] = structure_path
+            advance = "advance_modelling_stage with arguments " + json.dumps(arguments, ensure_ascii=False)
+            if checked.get("ok"):
+                return ("The current assessment is already ready and its checkpoint evidence is present. Call " +
+                        advance + ". Reuse the recorded assessment; do not return subtask_complete or repeat computation.", None)
+            issue = checked["error"]
+            if issue["code"] == "validation_required" and structure_path:
+                return ("The current assessment is already ready. Independently validate the bound candidate " +
+                        json.dumps(structure_path) + " with validate_modelling_artifact and task-appropriate checks, then call " +
+                        advance + ". Do not resubmit the assessment or return subtask_complete.", None)
+            return ("The current assessment is already ready, but its checkpoint needs this correction: " +
+                    json.dumps(issue, ensure_ascii=False) + ". Correct only the indicated evidence or argument, then use " +
+                    advance + ". Keep the recorded assessment; subtask_complete requires outcome=continue.", None)
         planned = workflow.pending_experiment
         if (planned and planned["plan_revision"] == workflow.plan_revision and planned["stage"] == workflow.current
                 and planned.get("origin", "planner_review") != "stage"):
@@ -149,6 +181,22 @@ class ExecutionActions:
                     | (READ_DEPENDENCIES & names))
         observation = evidence.experiment_observations.get(latest.execution_sequence) if latest else None
         if latest and (observation is None or observation["plan_revision"] != workflow.plan_revision):
+            from .measurements import constraint_failures
+            measured = evidence.measurement_reports.get(latest.execution_sequence, {})
+            checks = [row for row in workflow.requirement_coverage(evidence, execution=latest)
+                      if row["stage"] == "build"]
+            if (workflow.current == "build" and latest.exit_code == 0
+                    and measured.get("kind") == "candidate" and not constraint_failures(measured)
+                    and checks and all(row["status"] == "reported_pass" for row in checks)):
+                paths = workflow.execution_artifact_paths(evidence, latest)
+                return ("The execution returned a saved candidate with all current build checks reported pass. "
+                        "Briefly assess the actual output with advance_modelling_stage(stage='observe', "
+                        "hypothesis=..., measurement=..., outcome=..., next_step=...). "
+                        "Choose ready only if justified; independent validation remains required. "
+                        "Current artifact paths: " + json.dumps(paths) + ". Reuse this execution; "
+                        "do not create another verifier or construction step merely to record the assessment. "
+                        "If the reported result has a real unresolved failure, explain it and choose a repair or review.",
+                        exits | {"run_modelling_step"})
             if evidence.steps.available:
                 return (f"Use returned facts from {latest.path} (command_id={latest.command_id}) for ONE next code action, "
                         "combining its brief previous_assessment with the new/patch/rewrite/rerun tool. "
@@ -191,8 +239,8 @@ class ExecutionActions:
                     return (f"Inspect actual stderr from {item.path}; patch the failing part and rerun. "
                             "Request plan review with this execution if an assumption is contradicted.", None)
                 return (f"Use the measured output of {item.path} to implement ONE remaining construction or "
-                        "analysis step in saved Python, execute it, and inspect its result. If this measured subgoal is complete, "
-                        "finish_task status=subtask_complete with one next_experiment for a fresh delegation; keep same-goal repairs here. Reuse saved arrays "
+                        "analysis step in saved Python, execute it, and inspect its result. If this measured subgoal is complete "
+                        "and its recorded assessment is continue, use finish_task status=subtask_complete with one next_experiment for a fresh delegation; keep same-goal repairs here. Reuse saved arrays "
                         "and modules; do not restart the whole derivation. When all requested checks are met, "
                         "independently validate the saved structure before advancing build. A partial result "
                         "is useful evidence, not proof of a finished candidate.", None)
@@ -211,10 +259,11 @@ class ExecutionActions:
                 evidence.stop(f"Sandbox {box} is {state}; connect Execute + Start/Stop or start it from its card")
             return f"Start Sandbox {box} ({state}); obtain readiness before computing.", exits | {"start_sandbox"}
         if workflow.current == "build":
-            action = workflow.plan[workflow.index]["experiment"]
-            return (f"Implement the committed construction method in {action['artifact']}; generate known inputs "
+            action = workflow.pending_experiment or workflow.plan[workflow.index]["experiment"]
+            return (f"Implement the next executable result of the committed method in {action['artifact']}; generate known inputs "
                     "and measure derived values in that code. Produce the first candidate now when the construction "
                     "fits this finite action; otherwise save the necessary construction intermediate. "
+                    "The stage checks are final acceptance, not a requirement to solve every uncertainty before this step. "
                     f"Current question: {action['question']} Method: {action['method']} "
                     "Inspect actual candidate failures before choosing a repair. Keep final acceptance checks "
                     "unchanged; stop at the experiment's finite limit.", None)
@@ -335,20 +384,22 @@ class ExecutionActions:
             if evidence.workflow.current == "build":
                 current_tools.add("run_skill_script")
             self.allowed = current_tools
-            self.last_action += (" Use run_modelling_step for new scripts (source required in arguments), "
-                "patch_modelling_step for repairs (exact edits required), rerun_modelling_step for saved inputs, "
-                "or rewrite_modelling_step for an explicit replacement. Answer ONE current question with code, measured expected_output "
-                "and a finite stop_condition. The host saves and executes it without another model turn in between. "
-                "Check current_experiment.assessment_status: pending requires one brief assessment, either separately with observe "
-                "or combined using previous_assessment. Recorded means OMIT previous_assessment and proceed using the immutable host record. "
-                "Do not solve later questions before this result. Reuse saved artifacts; patch one measured failure at a time.")
+            if evidence.workflow.ready_execution(evidence) is None:
+                self.last_action += (" Use run_modelling_step for new scripts (source required in arguments), "
+                    "patch_modelling_step for repairs (exact edits required), rerun_modelling_step for saved inputs, "
+                    "or rewrite_modelling_step for an explicit replacement. Answer ONE current question with code, measured expected_output "
+                    "and a finite stop_condition. The host saves and executes it without another model turn in between. "
+                    "Check current_experiment.assessment_status: pending requires one brief assessment, either separately with observe "
+                    "or combined using previous_assessment. Recorded means OMIT previous_assessment and proceed using the immutable host record. "
+                    "Do not solve later questions before this result. Reuse saved artifacts; patch one measured failure at a time.")
         if (self.allowed is not None and evidence.workflow.current in {"probe", "build"}
                 and evidence.artifact_handoffs and not evidence.workflow.host_signal
                 and not evidence.workflow.review_request and not evidence.workflow.blocked and not evidence.closing_reason
                 and evidence.time_budget()["phase"] != "closeout"
                 and not (evidence.executions or evidence.pending or evidence.inline_pending or evidence.skill_operations)):
             self.allowed.add("validate_modelling_artifact")
-            self.last_action += " Independent validation is available for exact HOST artifact paths; reuse validate_modelling_artifact before writing another verifier."
+            if evidence.workflow.ready_execution(evidence) is None:
+                self.last_action += " Independent validation is available for exact HOST artifact paths; reuse validate_modelling_artifact before writing another verifier."
         feedback = evidence.correction_feedback
         if (feedback and feedback.get("role") == role and feedback.get("plan_revision") == evidence.workflow.plan_revision
                 and feedback["kind"] in {"workflow_state", "step_contract"}):
@@ -373,8 +424,8 @@ class ExecutionActions:
             config.max_output_tokens = min(config.max_output_tokens or ceiling, ceiling)
             self.output_token_ceiling = config.max_output_tokens
         if evidence.output_recoveries.get(role, 0):
-            self.last_action += (" Output-limit recovery has been used: continue with a saved, executable "
-                                 "step based on actual evidence; do not repeat the discarded derivation.")
+            self.last_action += (" Output-limit recovery has been used: follow the current next action "
+                                 "using saved facts and native receipts; do not repeat the discarded derivation.")
         if config is not None and bindings is not None:
             declarations = []
             for tool in getattr(config, "tools", None) or []:
@@ -411,7 +462,9 @@ class ExecutionActions:
 
     def snapshot(self):
         return {"next_action": self.last_action, "requests_without_progress": self.requests_without_progress,
-                "action_recoveries": self.recoveries, "sandbox_states": self.sandbox_states,
+                "action_recoveries": self.recoveries,
+                "action_recovery_policy": "Correct the current rejected action; the cumulative count is telemetry, not a Run limit.",
+                "sandbox_states": self.sandbox_states,
                 "inline_attempts": self.inline_attempts, "inline_measurements": self.inline_measurements[-2:],
                 "recovered_output_token_ceiling": self.output_token_ceiling}
 
@@ -445,22 +498,22 @@ class ExecutionActions:
                             workflow_event="sandbox_start_coalesced", duplicate_calls=omitted)
 
     def dependent_batch(self, evidence, parts):
-        """Allow parallel independent reads; keep state-changing steps serial.
+        """Reject every non-read-only batch; do not infer data dependencies.
 
-        Unknown operations are serialized too. Never partially dispatch a batch
-        and pretend the withheld half has a successful function response.
+        Unknown operations also require a single-call response. Never partially
+        dispatch a batch or fabricate results for withheld calls.
         """
         calls = [p.function_call for p in parts if getattr(p, "function_call", None)]
         readonly = READ_DEPENDENCIES
         return len(calls) > 1 and not all(evidence.semantic_tool(c.name) in readonly for c in calls)
 
-    def recovery_instruction(self):
-        return "HOST EXECUTION ACTION RECOVERY: " + (self.last_action or "Take the next executable step.") + \
-            " If observed execution contradicts a planning assumption, finish_task with JSON " \
-            "status=needs_plan_review, reason, sandbox and script_path of that execution. " \
-            "Otherwise use an authorized tool or report blocked. " \
-            "Return one dependent action per response; independent reads may be parallel. " \
-            "Do not repeat derivations. No tools from the discarded response ran. Existing receipts remain authoritative."
+    def recovery_instruction(self, error=None):
+        details = " Rejected response: " + json.dumps(error, ensure_ascii=False) + "." if error else ""
+        return ("HOST EXECUTION ACTION RECOVERY: " + (self.last_action or "Take the next executable step.") + details +
+            " If observed execution contradicts a planning assumption, finish_task with JSON "
+            "status=needs_plan_review, reason, sandbox and script_path of that execution. "
+            "Otherwise use an authorized tool or report blocked. " + SERIAL_ACTION_INSTRUCTION +
+            " Do not repeat derivations. No tools from the discarded response ran. Existing receipts remain authoritative.")
 
 
 async def collect_script_operation(evidence, definitions, invoke, semantic_name, arguments, result, stopped):

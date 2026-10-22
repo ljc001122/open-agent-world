@@ -77,21 +77,16 @@ def history(first, count=16, *, signed=False):
 
 
 @pytest.mark.asyncio
-async def test_working_context_removes_whole_settled_exchanges_keeps_latest_source_and_constraints():
+async def test_host_frames_do_not_apply_a_second_character_history_limit():
     e, calls, run = await setup()
     await run()
     e.limits = HarnessLimits(working_history_chars=8000)
     req = LlmRequest(contents=history(e.original_request), config=types.GenerateContentConfig(max_output_tokens=81920))
-    original = req.model_dump_json()
     e.before_model("structure_builder", req, NS(types=types), 81920)
-    assert len(req.contents) < 15 and req.contents[0].parts[0].text == e.original_request
+    assert len(req.contents) == 35 and req.contents[0].parts[0].text == e.original_request
     checkpoints = [p.text for c in req.contents for p in c.parts if p.text and 'HOST working-context checkpoint' in p.text]
-    assert len(checkpoints) == 1
-    checkpoint = json.loads(checkpoints[0])
-    assert "source" not in checkpoint["source_snapshot"]
-    assert "source_head" not in checkpoint["source_snapshot"]
-    assert checkpoint["source_snapshot"]["version"] == e.scripts[e.current_script_key].version
-    assert "working_decision" not in checkpoint  # dynamic HOST owns the ledger
+    assert not checkpoints
+    assert 'working_history_chars' not in e.limits.model_dump()  # Legacy cards still load.
     assert req.config.max_output_tokens == 81920
     pairs = [(p.function_call.id if p.function_call else p.function_response.id) for c in req.contents for p in c.parts
              if p.function_call or p.function_response]
@@ -101,10 +96,10 @@ async def test_working_context_removes_whole_settled_exchanges_keeps_latest_sour
     stable = [p.text for c in req.contents for p in c.parts if p.text and p.text.startswith("HOST STABLE CONTEXT")]
     assert len(stable) == 1 and json.loads(stable[0].split('\n', 1)[1])['original_user_request'] == e.original_request
     assert json.loads(stable[0].split('\n', 1)[1])['modelling_plan_context']['plan'] is not None
-    # Subsequent requests replace the host checkpoint rather than forgetting source or accumulating copies.
+    # Host frames replace themselves; native input accounting owns compaction.
     e.before_model("structure_builder", req, NS(types=types), 81920)
-    assert sum('HOST working-context checkpoint' in (p.text or '') for c in req.contents for p in c.parts) == 1
-    assert 'measured-15' in req.model_dump_json() and 'measured-0' in original
+    assert not any('HOST working-context checkpoint' in (p.text or '') for c in req.contents for p in c.parts)
+    assert 'measured-15' in req.model_dump_json() and 'measured-0' in req.model_dump_json()
 
 
 @pytest.mark.asyncio
