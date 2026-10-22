@@ -10,9 +10,14 @@ const types = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'te
  * identities are refreshed together. Failed builds are shown by Vite's overlay.
  */
 export function sourcePackArtifacts({ discover = sourcePacks, buildPack = buildSourcePack } = {}) {
-  let packs = [], server, output, chain = Promise.resolve();
+  let packs = [], server, output, artifactsReady = false, chain = Promise.resolve();
   const timers = new Map();
-  const buildAll = async () => { packs = await discover(); for (const pack of packs) await buildPack(pack); };
+  const buildAll = async () => {
+    artifactsReady = false;
+    packs = await discover();
+    for (const pack of packs) await buildPack(pack);
+    artifactsReady = true;
+  };
   return {
     name: 'oaw-source-pack-artifacts',
     configResolved(config) { output = path.resolve(config.root, config.build.outDir, 'assets/packs'); },
@@ -53,7 +58,7 @@ export function sourcePackArtifacts({ discover = sourcePacks, buildPack = buildS
       });
     },
     async closeBundle() {
-      if (server) return;
+      if (server || !artifactsReady) return;
       for (const pack of packs) {
         // The manifest proves that the builder completed before artifacts are
         // copied. Copy the full dist to include worker and lazy asset outputs.
