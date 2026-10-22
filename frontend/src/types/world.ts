@@ -384,6 +384,7 @@ export interface ConversationMessage {
   content: string;
   mention_agent_ids: string[];
   run_id?: string;
+  continuation_run_id?: string;
   created_at: string;
 }
 

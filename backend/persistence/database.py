@@ -467,6 +467,7 @@ class Database:
         self._connection.execute('''CREATE TABLE IF NOT EXISTS conversation_default_admissions (
             edge_id TEXT PRIMARY KEY REFERENCES edges(id) ON DELETE CASCADE)''')
         for name, definition in {
+            'continuation_run_id': 'TEXT',
             'attachments_json': "TEXT NOT NULL DEFAULT '[]'",
             'sequence': 'INTEGER NOT NULL DEFAULT 0',
             'kind': "TEXT NOT NULL DEFAULT 'text'",

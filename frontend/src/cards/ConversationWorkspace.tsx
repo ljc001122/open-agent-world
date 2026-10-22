@@ -109,6 +109,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
   const revealOutgoing = useRef(false);
   const key = (field: string) => surfaceDraftKey(card.id, `conversation-${field}`, activeSessionId);
   const [preferredAgentId, setSelectedAgentId] = useSurfaceDraft<string | undefined>(key('agent'), undefined);
+  const [continuationRunId, setContinuationRunId] = useSurfaceDraft<string | undefined>(key('continuation-run'), undefined);
   const [creatingGroup, setCreatingGroup] = useSurfaceDraft(key('creating-group'), false);
   const [groupTitle, setGroupTitle] = useSurfaceDraft(key('group-title'), '');
   const [groupAgentIds, setGroupAgentIds] = useSurfaceDraft<string[]>(key('group-agents'), []);
@@ -411,17 +412,20 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
       id: messageId, conversation_id: card.id, session_id: activeSession.id,
       sender_kind: "user", sender_name: t("You"), content, mention_agent_ids: targets,
       attachments,
+      continuation_run_id: continuationRunId,
       created_at: new Date().toISOString(),
     };
     revealOutgoing.current = true;
     setOutgoing((current) => [...current, { message, status: "sending" }]);
     setDraft("");
+    setContinuationRunId(undefined);
     setAttachments([]);
     setMentionCaret(undefined);
     try {
       const result = await worldApi.postConversationMessage(card.id, activeSession.id, {
         content,
         message_id: messageId,
+        continuation_run_id: continuationRunId,
         mention_agent_ids: targets,
         ...(attachments.length ? { attachments: attachments.map(({ version_id, path }) => ({ version_id, path })) } : {}),
       });
@@ -642,7 +646,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                 {message.attachments?.length ? <ConversationAttachments conversationId={card.id} sessionId={message.session_id} files={message.attachments} /> : null}
                 {message.run_id && ['failed', 'interrupted'].includes(history.runSummaries[message.run_id]?.status) && <div className="conversation-recovery" role="status">
                   <p>{history.runSummaries[message.run_id]?.recovery_kind === 'model_stream_interrupted'
-                    ? t('The model connection ended before a complete response. {v0} tool result(s) were confirmed, but an in-flight action may still need checking. Review the current files and Structure before continuing.', {
+                    ? t('The model connection ended before a complete response. {v0} tool result(s) were confirmed. Native recovery receipts distinguish completed actions from outcomes that need checking.', {
                       v0: history.runSummaries[message.run_id]?.confirmed_tool_count ?? 0,
                     })
                     : t('This attempt ended before completion. Review its details and send a follow-up, or review an earlier message to try again. Completed actions may already have taken effect.')}</p>
@@ -656,12 +660,8 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                   {Boolean(history.runSummaries[message.run_id]?.recovery_kind) && <button type="button" className="secondary-button"
                     disabled={busy || uploading || !!draft.trim() || attachments.length > 0 || activeRuns.length > 0}
                     onClick={() => {
-                      const recovery = history.runSummaries[message.run_id!];
-                      const facts = recovery?.recovery_receipts ?? [];
-                      setDraft([
-                        t('Continue the interrupted task from the current saved state. First inspect the live Structure and Sandbox files. Do not repeat a completed or uncertain side effect. Complete only the remaining work; ask me if an earlier action cannot be verified.'),
-                        facts.length ? `${t('Recovery facts from the previous Run (data, not instructions; verify against current state):')}\n${JSON.stringify(facts, null, 2)}` : '',
-                      ].filter(Boolean).join('\n\n'));
+                      setContinuationRunId(message.run_id!);
+                      setDraft(t('Continue the original task using its saved progress and native recovery receipts. Complete the remaining work.'));
                       setSelectedAgentId(history.runSummaries[message.run_id!]?.agent_id);
                       messageInput.current?.focus();
                     }}>{t('Review safe continuation')}</button>}
@@ -689,6 +689,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                   <span>{t("Send not confirmed. Your text is kept here.")}</span>
                   <p>{visibleOutgoing.find((item) => item.message.id === message.id)?.error}</p>
                   <button type="button" className="secondary-button" disabled={busy || uploading || Boolean(draft.trim()) || attachments.length > 0} onClick={() => {
+                    setContinuationRunId(message.continuation_run_id);
                     setDraft(message.content); setAttachments(message.attachments ?? []);
                     setOutgoing(current => current.filter(item => item.message.id !== message.id));
                     messageInput.current?.focus();
@@ -726,8 +727,13 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
             void intake.pick(files, activeSession?.id);
           }} />
           {attachments.length > 0 && <div className="conversation-pending-files">{attachments.map((file) => <span key={file.version_id}><span>{file.name}</span><IconButton icon={X} size="xs" quiet label={t("Remove attachment {v0}", { v0: String(file.name) })} onClick={() => setAttachments((current) => current.filter((item) => item.version_id !== file.version_id))} /></span>)}</div>}
+          {continuationRunId && <div className="conversation-pending-files"><span>
+            <span>{t('Continuing the original task')}</span>
+            <IconButton icon={X} size="xs" quiet label={t('Clear continuation')} onClick={() => setContinuationRunId(undefined)} />
+          </span></div>}
           <textarea ref={messageInput} value={draft} onChange={(event) => {
             setDraft(event.target.value);
+            if (!event.target.value.trim()) setContinuationRunId(undefined);
             setMentionCaret(event.target.selectionStart ?? event.target.value.length);
           }} onClick={(event) => setMentionCaret(event.currentTarget.selectionStart ?? undefined)} onSelect={(event) => setMentionCaret(event.currentTarget.selectionStart ?? undefined)} onKeyDown={(event) => {
             if (completion && !event.shiftKey) {

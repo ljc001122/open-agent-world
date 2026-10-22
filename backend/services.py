@@ -2641,6 +2641,13 @@ class ApplicationServices:
             self._require_session_participant(session, agent_id)
             self._require_conversation_connection(agent_id, conversation_id)
 
+        if request.continuation_run_id is not None:
+            from backend.conversations.continuation import require_source, original_task
+            source = require_source(self, str(request.continuation_run_id), conversation_id, session_id)
+            original_task(self, source.run_id, conversation_id, session_id)
+            if mentions != [source.agent_id]:
+                raise ConversationValidationError("Continue with the original Agent only")
+
         # Persistence is deliberately independent from Run admission. A busy
         # Agent must never make the user's message disappear or fail to send.
         message = self.conversations.add_message(
@@ -2654,6 +2661,7 @@ class ApplicationServices:
             mention_agent_ids=mentions,
             attachments=attachments,
             delivery_agent_ids=mentions,
+            continuation_run_id=str(request.continuation_run_id) if request.continuation_run_id else None,
         )
         await self._publish_conversation_message(message)
 
@@ -2681,11 +2689,18 @@ class ApplicationServices:
     def _conversation_delivery_task(self, message_ids: list[str]) -> str:
         messages = [self.conversations.get_message(message_id) for message_id in message_ids]
         if len(messages) == 1:
-            latest = messages[0].content
+            message = messages[0]
+            if message.continuation_run_id:
+                from backend.conversations.continuation import original_task
+                return original_task(self, message.continuation_run_id, message.conversation_id, message.session_id)
+            latest = message.content
         else:
             chunks = []
             for index, message in enumerate(messages, start=1):
                 text = message.content
+                if message.continuation_run_id:
+                    from backend.conversations.continuation import original_task
+                    text = original_task(self, message.continuation_run_id, message.conversation_id, message.session_id) + "\nContinuation request: " + text
                 for attachment in message.attachments:
                     text += (
                         f"\n[Attachment: {attachment.name}; version_id={attachment.version_id}; "
@@ -2765,10 +2780,14 @@ class ApplicationServices:
             )
             if not claimed:
                 return
-            prompt = self._conversation_delivery_prompt(
-                conversation_id, session, agent_id, claimed, max_sequence
-            )
             try:
+                prompt = self._conversation_delivery_prompt(
+                    conversation_id, session, agent_id, claimed, max_sequence
+                )
+                from backend.conversations.continuation import recovery_context
+                continuation = await recovery_context(self, claimed, agent_id)
+                if continuation.text:
+                    prompt += "\n\n" + continuation.text
                 run = await manager.start_run(
                     agent_id,
                     prompt,
@@ -2780,6 +2799,7 @@ class ApplicationServices:
                     initial_lifecycle={
                         "delivery_message_ids": claimed,
                         "conversation_max_sequence": max_sequence,
+                        "continuation_run_id": continuation.source_run_id,
                     },
                 )
             except Exception:

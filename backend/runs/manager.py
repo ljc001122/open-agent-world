@@ -339,6 +339,8 @@ class RunManager:
                 actor_id=agent_id,
                 run_id=record.run_id,
             )
+            self.state.set(state_context.local_scope, "task_prompt", task_prompt or prompt,
+                           actor_id=agent_id, run_id=record.run_id)
             self._execution_done[record.run_id] = asyncio.Event()
             self._terminal_done[record.run_id] = asyncio.Event()
             self._occupied_runs[record.run_id] = agent_id
@@ -725,7 +727,8 @@ class RunManager:
             state_context=self._state_context(record),
             group_context=team,
             delegation_context=record.lifecycle.get("delegation_context"),
-            extensions={"background_job_notification": record.lifecycle.get("background_job_notification")},
+            extensions={"background_job_notification": record.lifecycle.get("background_job_notification"),
+                        "continuation_run_id": record.lifecycle.get("continuation_run_id")},
         )
         token = _current_invocation.set(context)
         from .reasoning import RunReasoning
