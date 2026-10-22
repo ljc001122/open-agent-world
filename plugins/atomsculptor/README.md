@@ -91,6 +91,14 @@ Project work, an Environment Profile containing the required secret.
 The skill package intentionally makes no attempt to create virtual environments,
 install dependencies, manipulate a host environment or bypass OAW's Sandbox.
 Scientific packages belong in the explicitly selected Sandbox environment.
+Base modelling and core Skills use OAW's existing host-prepared shared Sandbox
+Python (`legacy-shared` in the Pack declaration). OAW's bootstrap prepares ASE,
+NumPy, Matplotlib and pymatgen once per execution platform in the active profile;
+Sandboxes reuse that read-only environment, including when workload networking
+is disabled. Preparation still needs a working package source or download cache.
+Materials Project and RDKit Skills retain OAW's private on-use environments for
+their extra dependencies. The backend's Conda site-packages are not copied into
+workloads. AtomSculptor provides no separate installer or environment cache.
 The equipped Toolbox is an editable local copy. Existing copies are not updated
 on plugin upgrades. During development, update their contents manually, or equip
 a newly created AtomSculptor Skills card and remove the old copy.
@@ -103,7 +111,7 @@ macOS Seatbelt; if a shell must invoke Python indirectly, select
 `python_environment=managed`. Check stderr and generated files as well as the
 command's exit code. A generated extxyz file must still pass the linked structure-inspect Skill,
 then be converted by that Skill and imported with the current Atom Structure revision. Run packaged Python entries through
-`run_skill_script`; the host supplies their interpreter and bundled dependencies.
+`run_skill_script`; the host selects their declared shared or private environment.
 For a small script repair, `write_sandbox_text_file` also accepts `edits` containing
 exact `old`/`new` replacements instead of full `content`. Each old fragment must occur
 once; an ambiguous match is rejected before any bytes are written.

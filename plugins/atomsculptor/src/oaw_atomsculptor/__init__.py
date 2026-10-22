@@ -308,8 +308,8 @@ class AtomSculptorPlugin:
         plugin_api_version="1.35",
         name="AtomSculptor",
         description="Agent-assisted atomistic structure modelling.",
-        # Ordinary runtime commands and Skill scripts use the same declared
-        # private Sandbox profile, prepared on use inside that Sandbox.
+        # Ordinary commands and core Skills use OAW's shared Sandbox Python;
+        # the Pack declaration feeds its existing host bootstrap.
         sandbox_environments=("modelling",),
     )
 

@@ -180,8 +180,15 @@ working-directory scripts, `-c`, `-m` and literal arguments. Shell commands inhe
 the private environment's `PATH`; explicit paths inside shell text retain normal
 shell semantics. Direct custom Python interpreter paths/versions and `-S` are
 rejected because they bypass the selected environment. `python_environment=none`
-cannot be combined with declared profiles. AtomSculptor uses this mechanism for
-its modelling commands instead of adding libraries to shared Sandbox Python.
+cannot be combined with runtime-declared profiles. Declarations marked
+`management="legacy-shared"` use the existing `PluginEnvironmentBootstrap` and
+read-only shared Sandbox Python instead of creating a private environment. Skill
+references preserve their authorization and declaration checks on this path.
+AtomSculptor uses shared profiles for base modelling and core Skills, so a new
+Sandbox reuses the host-prepared platform environment. Its optional Materials
+Project and RDKit Skills retain private profiles. When shared defaults compose
+with a private Skill profile, their requirements are included in that private
+environment; they do not inherit installed shared packages.
 
 Durable job providers can declare their own `sandbox_environments=("bohr",)`
 on `BackgroundJobProvider`. The host binds these profiles when the provider calls

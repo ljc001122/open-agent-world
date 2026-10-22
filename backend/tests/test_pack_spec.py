@@ -228,7 +228,8 @@ def test_repository_sources_preserve_runtime_and_pack_ids():
     assert specs["matcreator"].packs == ("matcreator.default",)
     assert specs["atomsculptor"].packs == ("atomsculptor.default",)
     assert specs["oaw.factory"].packs == ("oaw.factory",)
-    assert specs["atomsculptor"].legacy_python_requirements == ()
+    assert specs["atomsculptor"].legacy_python_requirements == (
+        "ase>=3.22", "matplotlib>=3.7", "numpy>=1.23", "pymatgen>=2024.0")
     assert specs["atomsculptor"].environments['modelling'].python == (
         "ase>=3.22", "matplotlib>=3.7", "numpy>=1.23", "pymatgen>=2024.0")
     assert specs["research.xrd"].environments["scientific"].management == "managed"

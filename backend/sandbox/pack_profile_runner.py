@@ -357,12 +357,21 @@ def main():
     package = Path(__file__).resolve().parent
     recipe = json.loads((package / "recipe.json").read_text(encoding="utf-8"))
     recipe["command_id"] = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != "-" else None
+    if recipe.get("management") == "legacy-shared":
+        # The host's normal bootstrap owns this read-only environment. Keep
+        # the mounted recipe for live admission checks, but no private cache.
+        return execute(recipe, package)
     with runtime_lease(recipe):
         return execute(recipe, package)
 
 
 def execute(recipe, package):
-    python, environment = prepare(recipe)
+    if recipe.get("management") == "legacy-shared":
+        # This process was launched through SharedPythonRuntime.command.
+        # Restart its interpreter without -S so its prepared packages load.
+        python, environment = Path(sys.executable), clean_environment()
+    else:
+        python, environment = prepare(recipe)
     if recipe['mode'] == 'command':
         return subprocess.call([str(item) for item in command_in_profile(sys.argv[2:], python, environment)],
                                env=environment, stdin=subprocess.DEVNULL)
