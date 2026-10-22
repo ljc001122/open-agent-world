@@ -15,14 +15,26 @@ def apply_text_edits(raw: bytes, edits: list) -> bytes:
         raise SandboxValidationError("Text edits require an existing UTF-8 file") from exc
     if "\0" in text or not isinstance(edits, list) or not 1 <= len(edits) <= 20:
         raise SandboxValidationError("Use 1 to 20 exact text edits on a UTF-8 file without NUL bytes")
-    for edit in edits:
+    for index, edit in enumerate(edits, 1):
         if (not isinstance(edit, dict) or set(edit) != {"old", "new"}
                 or not isinstance(edit["old"], str) or not edit["old"]
                 or not isinstance(edit["new"], str)
                 or "\0" in edit["old"] or "\0" in edit["new"]):
             raise SandboxValidationError("Each edit needs nonempty old text and replacement new text")
-        if text.count(edit["old"]) != 1:
-            raise SandboxValidationError("Each old text must match exactly once; add surrounding context")
+        count = text.count(edit["old"])
+        if count != 1:
+            # Report positions in the sequential preview, never modify the
+            # file or guess a fuzzy replacement. Bound diagnostics for repeats.
+            positions, start = [], 0
+            for _ in range(min(count, 5)):
+                start = text.find(edit["old"], start)
+                positions.append(text.count("\n", 0, start) + 1)
+                start += len(edit["old"])
+            locations = f"; matching start lines in the sequential edit preview: {positions}" if positions else ""
+            raise SandboxValidationError(
+                f"Edit {index}: old text matched {count} times; expected exactly once{locations}. "
+                "Read the current source around the intended change; copy its exact text and add unique surrounding context. "
+                "No file was written.")
         text = text.replace(edit["old"], edit["new"], 1)
     try:
         result = text.encode("utf-8")

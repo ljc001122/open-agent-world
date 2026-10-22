@@ -17,6 +17,16 @@ from backend.tests.conftest import create_node
 from open_agent_world.skill_packages import Skill, SkillPackagePlugin
 
 
+@pytest.fixture
+def client(data_root):
+    # Explicit registration tests the Skill API without preparing optional
+    # source Packs' unrelated scientific/backend environments.
+    settings = Settings.for_data_root(data_root)
+    services = create_services(settings, plugins=load_plugin_registry())
+    with TestClient(create_app(settings, services=services)) as value:
+        yield value
+
+
 def edit(client, node, action, arguments):
     url = f"/api/nodes/{node['id']}"
     current = client.get(url + "/document").json()
@@ -64,6 +74,32 @@ def test_toolbox_editing_progressive_read_and_legion_copy(client):
     client.delete(f"/api/edges/{edge['id']}")
     with pytest.raises(PermissionDeniedError):
         read({})
+
+
+def test_unknown_skill_lists_only_current_authorized_toolbox_ids_with_bounded_output(client):
+    node = create_node(client, "oaw.skills")
+    hidden = create_node(client, "oaw.skills")
+    edit(client, hidden, "upsert", {"id": "private-skill", "name": "Hidden"})
+    for identity in ["structure-inspect", *[f"example-{i}" for i in range(15)]]:
+        edit(client, node, "upsert", {"id": identity, "name": identity})
+    agent = create_node(client, "agent")
+    edge = client.post("/api/edges", json={"source": agent["id"], "target": node["id"],
+                                          "relationship": "oaw.skills.use"}).json()
+    provider = WorldAgentCapabilityProvider(client.app.state.services)
+    tool = client.portal.call(provider.list_tools, agent["id"])[0]
+    def read(identity):
+        return client.portal.call(provider.invoke_tool, agent["id"], tool.capability_id,
+                                  {"toolbox": node["id"], "skill_id": identity})
+    with pytest.raises(ResourceValidationError) as caught:
+        read("structure_inspect")
+    message = str(caught.value)
+    assert "Use exact Skill ID 'structure-inspect'" in message
+    assert "12 of 16" in message and "private-skill" not in message
+    assert "Omit skill_id" in message and len(message) < 1600
+    assert read("structure-inspect")["skill"]["id"] == "structure-inspect"
+    client.delete(f"/api/edges/{edge['id']}")
+    with pytest.raises(PermissionDeniedError):
+        read("structure_inspect")
 
 
 def test_member_edit_invalidates_parent_revision_and_preserves_assembled_document(client):

@@ -716,6 +716,18 @@ async def _inspect_sandbox(
     return await context.inspect_sandbox(capability.agent_id, capability.target_id, **options.model_dump())
 
 
+async def _list_sandbox_files(context, capability, values):
+    from backend.sandbox_workspace import WorkspaceList
+    from backend.capabilities.provider import _validate_tool_request
+    return await context.sandbox_workspace_action(capability, "list", _validate_tool_request(WorkspaceList, values))
+
+
+async def _read_sandbox_file(context, capability, values):
+    from backend.sandbox_workspace import WorkspacePreview
+    from backend.capabilities.provider import _validate_tool_request
+    return await context.sandbox_workspace_action(capability, "preview", _validate_tool_request(WorkspacePreview, values))
+
+
 async def _start_sandbox(context, capability, values):
     if set(values) - {"include_shared_python"} or ("include_shared_python" in values and type(values["include_shared_python"]) is not bool):
         raise ResourceValidationError("sandbox start accepts only include_shared_python (boolean)")
@@ -853,6 +865,9 @@ def _register_builtin(registry: PluginRegistration) -> None:
         "input": StateFieldDefinition(
             value_type=str, allowed_scope_kinds=run_only
         ),
+        "task_prompt": StateFieldDefinition(
+            value_type=str, allowed_scope_kinds=run_only, host_only=True, read_visibility="scope_only"
+        ),
         "progress": StateFieldDefinition(
             value_type=float, allowed_scope_kinds=run_only
         ),
@@ -988,6 +1003,19 @@ def _register_builtin(registry: PluginRegistration) -> None:
         kind='sandbox.run_skill_script', tool_name='run_skill_script', target_parameter='sandbox',
         description='Run a file from the selected Skill in the selected sandbox. Both resources require independent live authorization. The current bundle is mounted read-only outside the workspace; cwd and generated outputs use the sandbox workspace.',
         input_schema=skill_script_schema(), selectors=(SKILL_SELECTOR, *EXECUTION_SELECTORS), target_capabilities=frozenset({"sandbox.execute"})), _run_skill_script)
+    from backend.sandbox_workspace import WorkspaceList, WorkspacePreview
+    registry.register_capability(CapabilityDefinition(
+        kind='sandbox.list_files', tool_name='list_sandbox_files', target_parameter='sandbox', read_only=True,
+        description='List files in an authorized Sandbox workspace without running commands or writing files. '
+            'Use a relative directory path; query optionally searches filenames recursively. Follow next_cursor until '
+            'null before concluding that the search scope has no matches. A directory page does not inspect file contents.',
+        input_schema=WorkspaceList.model_json_schema()), _list_sandbox_files)
+    registry.register_capability(CapabilityDefinition(
+        kind='sandbox.read_file', tool_name='read_sandbox_file', target_parameter='sandbox', read_only=True,
+        description='Preview bounded UTF-8 text from an authorized workspace-relative file without execution or writes. '
+            'Returns text with offset, total_chars and next_offset; follow pages only as needed. Images/binary/oversized '
+            'files return a state rather than content. A preview is file evidence, not scientific validation.',
+        input_schema=WorkspacePreview.model_json_schema()), _read_sandbox_file)
     from backend.sandbox.history import SandboxInspection
     registry.register_capability(CapabilityDefinition(
         kind='sandbox.inspect', tool_name='inspect_sandbox', target_parameter='sandbox',
@@ -1136,14 +1164,14 @@ def _register_builtin(registry: PluginRegistration) -> None:
         description="The agent can run commands in this isolated workplace. Starting and stopping require manual control.",
         source_traits=frozenset({"core.agent"}), target_traits=frozenset({"core.sandbox"}),
         templateable=True,
-        capabilities=(CapabilityGrantDefinition(kind='sandbox.execute'), CapabilityGrantDefinition(kind='sandbox.write_text_file'), CapabilityGrantDefinition(kind='sandbox.cancel_command'), CapabilityGrantDefinition(kind='sandbox.install_python_packages'), CapabilityGrantDefinition(kind='sandbox.run_skill_script'), CapabilityGrantDefinition(kind='sandbox.inspect'), CapabilityGrantDefinition(kind='sandbox.wait'), CapabilityGrantDefinition(kind='sandbox.copy_skill_resource')),
+        capabilities=(CapabilityGrantDefinition(kind='sandbox.execute'), CapabilityGrantDefinition(kind='sandbox.write_text_file'), CapabilityGrantDefinition(kind='sandbox.cancel_command'), CapabilityGrantDefinition(kind='sandbox.install_python_packages'), CapabilityGrantDefinition(kind='sandbox.run_skill_script'), CapabilityGrantDefinition(kind='sandbox.inspect'), CapabilityGrantDefinition(kind='sandbox.list_files'), CapabilityGrantDefinition(kind='sandbox.read_file'), CapabilityGrantDefinition(kind='sandbox.wait'), CapabilityGrantDefinition(kind='sandbox.copy_skill_resource')),
     ))
     registry.register_relationship(RelationshipDefinition(
         canvas_requires_confirmation=True, id="execute_manage", label="Execute + Start/Stop", short_label="execute + manage",
         description="The agent can run commands, start this Sandbox and stop it, including active commands.",
         source_traits=frozenset({"core.agent"}), target_traits=frozenset({"core.sandbox"}),
         templateable=True,
-        capabilities=(CapabilityGrantDefinition(kind='sandbox.start'), CapabilityGrantDefinition(kind='sandbox.stop'), CapabilityGrantDefinition(kind='sandbox.execute'), CapabilityGrantDefinition(kind='sandbox.write_text_file'), CapabilityGrantDefinition(kind='sandbox.cancel_command'), CapabilityGrantDefinition(kind='sandbox.install_python_packages'), CapabilityGrantDefinition(kind='sandbox.run_skill_script'), CapabilityGrantDefinition(kind='sandbox.inspect'), CapabilityGrantDefinition(kind='sandbox.wait'), CapabilityGrantDefinition(kind='sandbox.copy_skill_resource')),
+        capabilities=(CapabilityGrantDefinition(kind='sandbox.start'), CapabilityGrantDefinition(kind='sandbox.stop'), CapabilityGrantDefinition(kind='sandbox.execute'), CapabilityGrantDefinition(kind='sandbox.write_text_file'), CapabilityGrantDefinition(kind='sandbox.cancel_command'), CapabilityGrantDefinition(kind='sandbox.install_python_packages'), CapabilityGrantDefinition(kind='sandbox.run_skill_script'), CapabilityGrantDefinition(kind='sandbox.inspect'), CapabilityGrantDefinition(kind='sandbox.list_files'), CapabilityGrantDefinition(kind='sandbox.read_file'), CapabilityGrantDefinition(kind='sandbox.wait'), CapabilityGrantDefinition(kind='sandbox.copy_skill_resource')),
     ))
     registry.register_relationship(RelationshipDefinition(
         id="mount_read_only", label="Mount read-only", short_label="read-only",

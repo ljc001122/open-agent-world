@@ -366,6 +366,10 @@ class _CapabilityContext:
         info = await self.services.stop_sandbox(sandbox_id, agent_id=agent_id)
         return {"sandbox_id": sandbox_id, "state": info.state.value}
 
+    async def sandbox_workspace_action(self, capability, operation, options):
+        from backend.sandbox_workspace import inspect_workspace
+        return await inspect_workspace(self.services, capability, operation, options)
+
     async def inspect_sandbox(self, agent_id: str, sandbox_id: str, *, history_scope="caller", history_limit=3,
                               include_output=False, include_shared_python=False) -> dict[str, Any]:
         self.services.capabilities.require_sandbox_execute(agent_id, sandbox_id)

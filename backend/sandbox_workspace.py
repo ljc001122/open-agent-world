@@ -2,6 +2,8 @@
 import base64
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from backend.errors import PermissionDeniedError, ResourceValidationError
 from backend.execution_config import configuration_summary
 from backend.node_documents import read_document
@@ -76,3 +78,50 @@ async def diagnostics(services, sandbox_id, destination=None):
     return {"status": status, "configuration": summary, "workspace_access": str(info.workspace_access), "network_enabled": info.network_enabled,
         "network_reason": info.network_reason, "stdout": result.stdout, "stderr": result.stderr,
         "exit_code": result.exit_code, "note": "Missing interpreters/packages are not installed. Code receiving a secret can read it."}
+
+
+# These tools use the same file backend and path boundary as the Sandbox UI.
+# They never execute user/model code or accept host filesystem paths.
+
+
+class WorkspaceList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(default="", max_length=4096)
+    cursor: str = Field(default="", max_length=8192)
+    query: str = Field(default="", max_length=256)
+
+
+class WorkspacePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=4096)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=4000, ge=1, le=8000)
+
+
+async def inspect_workspace(services, capability, operation, options):
+    expected = {"sandbox.list_files": ("list", WorkspaceList), "sandbox.read_file": ("preview", WorkspacePreview)}
+    kind = expected.get(capability.kind)
+    if kind is None or operation != kind[0] or not isinstance(options, kind[1]):
+        raise ResourceValidationError("Use the declared read-only Sandbox file operation")
+    async with services._node_mutation(read_only=True):
+        live = services.capabilities.capability_for_id(capability.agent_id, capability.id)
+        if live.kind != capability.kind or live.target_id != capability.target_id:
+            raise PermissionDeniedError("Sandbox file access was revoked")
+        services.capabilities.require_sandbox_execute(capability.agent_id, live.target_id)
+        arguments = options.model_dump(exclude={"offset", "limit"})
+        result = await services._require_sandbox_backend().file_operation(
+            live.target_id, operation, root="workspace", **arguments)
+    if operation == "list":
+        return {"sandbox_id": live.target_id, "path": options.path, "query": options.query,
+                "scope": "recursive filename search" if options.query.strip() else "directory",
+                **result}
+    if result.get("state") != "text":
+        # Images/binary files are not serialized into an LLM text tool reply.
+        return {"sandbox_id": live.target_id, "path": options.path,
+                "state": result.get("state"), **({"limit": result["limit"]} if "limit" in result else {})}
+    text = result["text"]
+    offset = min(len(text), options.offset)
+    end = min(len(text), offset + options.limit)
+    return {"sandbox_id": live.target_id, "path": options.path, "state": "text",
+            "text": text[offset:end], "offset": offset, "total_chars": len(text),
+            "truncated": end < len(text), "next_offset": end if end < len(text) else None}

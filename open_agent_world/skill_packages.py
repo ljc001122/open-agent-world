@@ -99,7 +99,7 @@ class ToolboxConfig(BaseModel):
 
 class ReadSkill(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    skill_id: str | None = Field(default=None, description="Omit to list skills; use a listed node ID or a unique Skill ID to read one member.")
+    skill_id: str | None = Field(default=None, description="Omit to list skills; use a listed node ID or a unique Skill ID exactly as listed, preserving hyphens and underscores, to read one member.")
     file_path: str | None = Field(default=None, description="Optional path within the selected skill, such as scripts/build.py or assets/logo.png, to read that file. Binary files return base64 and media_type.")
     include_file_contents: bool = Field(default=False, description="Set false to read instructions and a file manifest without injecting bundled script contents into the model context. file_path still reads one requested file.")
 
@@ -263,7 +263,12 @@ def register_skill_package(registration, *, node_type: str, package: SkillPackag
             if not matches:
                 exact = next((skill["id"] for skill in current["skills"]
                               if skill["id"].replace("-", "_") == request.skill_id), None)
-                hint = f" Use exact Skill ID {exact!r}." if exact else " List the toolbox for exact IDs."
+                hint = f" Use exact Skill ID {exact!r}." if exact else ""
+                ids = [skill["id"] for skill in current["skills"]]
+                shown = ids[:12]
+                hint += f" Valid Skill IDs in this toolbox ({len(shown)} of {len(ids)}): {shown!r}."
+                if len(shown) < len(ids):
+                    hint += " Omit skill_id to list all members and their node IDs."
                 raise ResourceValidationError(f"Unknown Skill ID {request.skill_id[:120]!r}.{hint}")
             if len(matches) > 1:
                 raise ResourceValidationError("Skill ID is ambiguous; use a listed node ID")
