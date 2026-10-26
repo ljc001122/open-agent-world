@@ -50,7 +50,7 @@ Low-level optical descriptors retain six canonical IDs: `normal / foil / holo / 
 - **Aurora:** continuous warped thickness with broad interference colour travel.
 - **Laser / starlight:** extension presets using the same groove and flake parameters; no separate rendering branches. Shared clearcoat can remain visible outside the laser diffraction window.
 
-Storage remains independent: existing `CardFinish` IDs and reward probabilities are unchanged. `materialForFinish('rainbow')` maps to `aurora` to preserve the old flowing-film identity. Holo is a distinct laminate, selectable in the production editor; this change does not add new inventory rewards.
+`CardFinish` inventory IDs and reward probabilities are separate from material selection. `materialForFinish('rainbow')` maps to `aurora`; Holo is a distinct laminate selectable in the production editor.
 
 ### Light, view and optical evaluation
 

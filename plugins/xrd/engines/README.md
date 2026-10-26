@@ -151,27 +151,26 @@ upstream license:
 
 Keep the upstream license and provenance with external source/build artifacts.
 Do not relabel QualX code as OAW-licensed. Qt, GCC runtime, and other portable
-dependencies retain their respective licenses. No upstream source or compiled
-runtime is vendored in this plugin directory.
+dependencies retain their respective licenses. QualX source and compiled binaries
+are not vendored in this plugin directory.
 
 ## PyWPEM bounded cell updates
 
-Apply `pywpem-bounded-cell.patch` to the local PyWPEM source after the live-frame patch.
-It corrects the triclinic metric determinant sign and replaces unconstrained
-Newton cell steps with symmetry-preserving bounded least squares on Bragg angles.
+OAW's bundled [OAW_XRDfit](../TEMPLATE_CONTRACT.md#bundled-engine) includes bounded
+cell updates. The patch files here retain the upstream adaptation record; Pack
+users do not apply them to an external checkout. The engine uses the triclinic
+metric determinant and symmetry-preserving bounded least squares on Bragg angles.
 Each step allows at most 1% length change and 0.5 degree angle change; these are
 per-step limits, not global bounds relative to the initial CIF. Invalid metrics,
 Bragg-domain violations, failed optimization and worsening steps retain the previous
 cell. Fewer selected reflections than cell parameters leave the cell unchanged.
-The engine source hashes in each review include this implementation, invalidating
-old fit caches. This changes the post-search refinement protocol, not the LLM/BO score.
+Engine source hashes are part of each review's cache identity. These limits apply
+to post-search refinement, independently of the LLM/BO screening score.
 
 Zero-responsibility EM peaks retain their previous centers rather than generating
-0/0. Nonfinite responsibilities still fail explicitly. Run the independent metric
-and optimization tests with the scientific Python and `OAW_XRD_ROOT` set:
-`python plugins/xrd/engines/test_pywpem_bounded_cell.py -q`.
+0/0. Nonfinite responsibilities fail explicitly.
 
-Per-phase export now consumes each coincident reflection once within its own phase,
+Per-phase export consumes each coincident reflection once within its own phase,
 preventing duplicate peak centers from reusing another component's parameters.
 The adapter skips exactly zero-area exports with undefined mixing ratios and
 continues to reject invalid nonzero components or failed profile closure.

@@ -104,13 +104,6 @@ do not bundle their own Sigma or Graphology. The host loads the renderer lazily;
 Vite emits the Worker as a separate same-origin asset. Development dependency
 prebundling includes the Worker algorithms to avoid an unexpected first-use reload.
 
-MatCreator and Visualization whole frontend modules, and Knowledge Base's graph
-adapter, were built and imported through the standalone SDK bundler with no
-duplicated graph dependencies. The complete Knowledge Base workspace still has
-pre-existing private host imports (model settings, Markdown and deployment APIs),
-so it is validated as a bundled official view, not claimed to be an independently
-installable source Pack. This refactor does not broaden that existing boundary.
-
 ## Reproduce verification
 
 From `frontend/`:

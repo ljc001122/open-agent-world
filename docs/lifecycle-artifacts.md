@@ -238,15 +238,6 @@ Text/Image resources, workspace files and arbitrary artifact metadata remain usa
 There is no destructive data rewrite. Plugin API 1.12 provides
 additive request/context contracts. Existing compatible plugins remain supported.
 
-Tests include an actual killed backend process at publication, committed output,
-deletion and reclamation boundaries; combined summoned-Run publication and private
-workspace reclamation; large binary/bundle integrity; mutable source isolation;
-concurrent requests, transfer/deletion exclusion, permission revocation, path and
-hardlink attacks; cleanup failure/retry; quiet tools, deadlines and detached Runs.
-The Playwright flow publishes through the file view and restores retained state
-after producer deletion and browser reload. A separately enabled real Windows
-AppContainer test generates, publishes, reclaims and consumes an output.
-
 No arbitrary Python coroutine/provider session resumption, external-job reattachment,
 remote-side-effect cancellation guarantee, automatic GC, writable canonical mount,
 or concurrent-writer filesystem snapshot is promised. Native Linux/WSL isolation

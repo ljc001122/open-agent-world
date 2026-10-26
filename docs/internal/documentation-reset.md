@@ -45,9 +45,9 @@
 
 | 层次 | 实际运行 | 结果与边界 |
 | --- | --- | --- |
-| 文档站点 | `python scripts/docs.py check`（准备好的 venv 在 PATH 中） | 97 源页面、16 文档单元检查、严格 MkDocs 构建；98 生成页面、12,816 本地链接/资源、43 搜索页面全部通过 |
-| 全仓链接 | 一次性检查所有现存 Markdown（含插件、示例与 internal） | 180 文件、644 相对链接/锚点，无缺失；未检查所有外部 HTTP 网站的实时可用性 |
-| 应用 Help / 教程单元测试 | `npx vitest run src/shell/documentation.test.ts src/shell/DocumentationPanel.test.tsx src/shell/HelpMenu.test.tsx src/onboarding/tutorial.test.ts src/tutorials/store.test.ts src/tutorials/ProgressiveTutorials.test.tsx --no-cache` | 6 文件、52 测试通过；包括网站与应用读者分类一致性、inventory、图片、链接、中文 fallback |
+| 文档站点 | `python scripts/docs.py check`（准备好的 venv 在 PATH 中） | 97 源页面、16 文档单元检查、严格 MkDocs 构建；98 生成页面、12,811 本地链接/资源、43 搜索页面全部通过 |
+| 全仓链接 | 一次性检查所有现存 Markdown（含插件、示例与 internal） | 180 文件、649 相对链接/锚点，无缺失；未检查所有外部 HTTP 网站的实时可用性 |
+| 应用 Help / 教程单元测试 | `npx vitest run src/shell/documentation.test.ts src/shell/DocumentationPanel.test.tsx src/shell/HelpMenu.test.tsx src/onboarding/tutorial.test.ts src/tutorials/store.test.ts src/tutorials/ProgressiveTutorials.test.tsx --no-cache` | 首轮 6 文件、52 测试通过；二次正文清理后重跑 inventory 与 DocumentationPanel 共 8 测试通过；包括分类、图片、链接、中文 fallback |
 | 后端教程与权限 | `python -m pytest backend/tests/test_tutorials.py backend/tests/test_capabilities.py -q -p no:cacheprovider` | 18 测试通过；文案最终修改后再次运行教程文件，13 测试通过。仅有 Starlette/httpx 弃用警告 |
 | Card App 集成 | `uv run --project backend --with-editable <project> python -m pytest -p no:cacheprovider <project>/tests` | 1 个完整集成测试通过：真实注册、工具调用、配置更新、隔离、克隆、非法输入、删除后的授权撤销 |
 | 示例构建 | 从中英文教程抽取代码块，检查两种语言完全一致，复制 Python Greeter；构建并安装 SDK tarball、`npm run build`、`uv build --wheel`、`doctor`、`build-project`、`inspect` | 全部通过。项目位于宿主 checkout 外，未依赖宿主私有前端 import |
@@ -66,6 +66,23 @@
 
 没有运行全项目 pytest/Vitest/E2E，没有手动触发 CI。原 `D:/AI/open-agent-world` 工作区仍是干净的 dev，指向同一基线。日志与截图保存在本 worktree 的 `.tmp/`（不入库）；上述命令、归档 digest 和限制是可随提交审阅的证据摘要。
 
+
+## 公开正文二次清理
+
+用户指出首轮可能仍偏重移动和拆分。复核确认有遗漏：首轮提交 `8217faa6` 的净减少 2,521 行中，根目录 Markdown 净减 1,254 行、internal 净减 877 行；公开 `docs/` 净减 251 行，插件 Markdown 净减 231 行。行数不能证明逐篇内容已经清理充分。
+
+本轮直接删除正文中的过程记录，不新增 Archive，也不改业务代码：
+
+- MatCreator 用户路径改为安装、任务、读结果与排查；删除旧分支迁移、布局 revision、源码目录与测试覆盖叙述。
+- MatCreator 的真实声明为 Pack 0.10.0 / API 1.36；旧正文分别写成 0.7/1.31 和 0.9/1.35。参考文档改为链接当前 manifest，避免再复制版本号。
+- 对照当前 ExecutionGraph.tsx，移除旧的三轨道自动折叠、Dependency lens / Step graph 及 160 节点镜头说明。用户文档说明当前的行内详情和引用导航；API 文档保留数据语义，删除像素、动画周期和测试 fixture 的实现叙述。
+- AtomSculptor 累计 token 预算已经从 HarnessLimits 移除；删除与此冲突的 262144 累计预算说法，保留每次请求上限、显式角色上限、超时和旧配置处理规则。
+- XRD 使用内置 OAW_XRDfit，用户无需外部 PyWPEM checkout 或手动补丁；谱库入口更新为当前的挂载槽位，保留科学解释限制和来源许可。
+- Pack IDE、声明式卡包、源码 setup、发布、图渲染和生命周期文档删除验收叙述与演化故事；Sandbox 保留完整安全前提和可复现维护步骤，删除某次 Windows/Linux 实跑状态。
+
+本轮的内容事实以源码、测试定义和现有 UI 定义为依据；没有声称重新实跑 MatCreator 或 XRD 的科学流程。尝试执行 AtomSculptor 的两个输出限额测试时，收集阶段缺少 `google.genai`，没有测试运行或通过；未为文档改动扩大依赖安装。
+
+独立维护问题：`plugins/xrd/engines/test_pywpem_bounded_cell.py` 仍从 `<OAW_XRD_ROOT>/PyWPEM` 导入外部源码。已撤下正文对该命令的推荐；测试脚本本身未修改，仍需维护者另行迁移到内置引擎路径。
 
 ## 完整处置清单
 
@@ -86,7 +103,7 @@
 | `docs/architecture.md` | 校正 | `docs/architecture.md` | frontend/src/cards/CardFrame.tsx; backend/plugins/registry.py; graph ownership |
 | `docs/assets/demos/README.md` | 保留 | `docs/assets/demos/README.md` | 保留图像采集时间与示例数据说明；素材来源不是当前验收记录 |
 | `docs/canvas-control.md` | 保留 | `docs/canvas-control.md` | backend/canvas_control.py; backend/tests/test_canvas_control.py |
-| `docs/canvas-performance.md` | 保留 | `docs/canvas-performance.md` | frontend/src/canvas; frontend/scripts; docs/internal/performance |
+| `docs/canvas-performance.md` | 精简 | `docs/canvas-performance.md` | frontend benchmark scripts; remove public links to old measurement reports |
 | `docs/card-factory.md` | 重写 | `docs/card-factory.md；docs/reference/factory-recipes.md` | FactoryViews.tsx; Packer; actual activation status |
 | `docs/card-factory.zh-CN.md` | 重写 | `docs/card-factory.zh-CN.md` | FactoryViews; publishing handoff; schema validation |
 | `docs/card-library.md` | 保留 | `docs/card-library.md` | backend/card_library.py; frontend/src/shell/CardLibrary.tsx |
@@ -107,19 +124,19 @@
 | `docs/developers/card-finishes.md` | 校正 | `docs/developers/card-finishes.md` | backend/card_finishes.py; frontend/src/cards; removed development-history sentence |
 | `docs/developers/context-compaction.md` | 保留 | `docs/developers/context-compaction.md` | backend/plugins/execution.py; backend/agents; backend/tests |
 | `docs/developers/data-sources.md` | 保留 | `docs/developers/data-sources.md` | backend/plugins/data_sources.py; plugins/sqlite; plugins/knowledge_base; plugins/visualization |
-| `docs/developers/declarative-packs.md` | 保留 | `docs/developers/declarative-packs.md` | backend/packs; examples/packs/notes; examples/packs/analysis-card |
+| `docs/developers/declarative-packs.md` | 精简 | `docs/developers/declarative-packs.md` | backend/packs and Notes example; replace acceptance narrative with verification link; remove unrelated XRD refactor work |
 | `docs/developers/documentation.md` | 重写 | `docs/developers/documentation.md` | scripts/docs.py; docs_hooks; documentation tests; docs workflow |
-| `docs/developers/execution-graph.md` | 保留 | `docs/developers/execution-graph.md` | backend/plugins/execution_graph.py; backend/execution_graph.py; frontend/src/cards/ExecutionGraph.tsx |
+| `docs/developers/execution-graph.md` | 精简 | `docs/developers/execution-graph.md` | ExecutionGraph.tsx and execution graph models; retain provider/paging contract; remove pixel-level design history and fixture narrative |
 | `docs/developers/extension-points.md` | 保留 | `docs/developers/extension-points.md` | open_agent_world/plugin_api; backend/plugins/registry.py |
 | `docs/developers/first-plugin.md` | 合并为迁移入口 | `docs/developers/card-app.md (old path retained)` | examples/plugins/greeter and continuous card-app tutorial |
 | `docs/developers/frontend.md` | 合并为迁移入口 | `docs/developers/card-app.md (old path retained)` | examples/plugins/greeter and continuous card-app tutorial |
 | `docs/developers/index.md` | 重写 | `docs/developers/index.md` | public SDK modules; existing Greeter; Factory and Pack IDE entries |
 | `docs/developers/index.zh-CN.md` | 重写 | `docs/developers/index.zh-CN.md` | same as English developer entry |
-| `docs/developers/pack-ide.md` | 保留 | `docs/developers/pack-ide.md` | frontend/src/factory/PackIDE.tsx; frontend/src/factory/PackIDE.tsx; frontend/src/shell/CardLibrary.tsx |
+| `docs/developers/pack-ide.md` | 精简 | `docs/developers/pack-ide.md` | PackIDE.tsx and source Pack CLI; remove delivery report claims; preserve experimental scope and compatibility |
 | `docs/developers/progressive-tutorials.md` | 保留 | `docs/developers/progressive-tutorials.md` | backend/plugins/tutorials.py; frontend/src/tutorials; backend/tests/test_tutorials.py |
 | `docs/developers/progressive-tutorials.zh-CN.md` | 保留 | `docs/developers/progressive-tutorials.zh-CN.md` | backend/plugins/tutorials.py; frontend/src/tutorials; backend/tests/test_tutorials.py |
 | `docs/developers/quickstart-pack.md` | 重写 | `docs/developers/quickstart-pack.md` | pack CLI init; Store; default source setup |
-| `docs/developers/setup.md` | 保留 | `docs/developers/setup.md` | scripts/setup.py; scripts/dev.py; frontend/scripts/source-packs.mjs |
+| `docs/developers/setup.md` | 精简 | `docs/developers/setup.md` | scripts/setup.py / scripts/dev.py; keep profile and setup commands; remove launcher cache implementation and test narrative |
 | `docs/developers/testing.md` | 重写 | `docs/developers/testing.md` | scripts/build-external-greeter.py; run-pack-e2e.mjs; test_greeter_plugin.py |
 | `docs/developers/workspace-design.md` | 保留 | `docs/developers/workspace-design.md` | frontend/src/plugins/sdk.ts; frontend/src/legions/workspaceLayout.ts |
 | `docs/enterprise-foundations.md` | 重写 | `docs/enterprise-foundations.md` | backend/control_plane.py; request_context; health; persistence idempotency |
@@ -171,22 +188,22 @@
 | `docs/reference/index.md` | 重写 | `docs/reference/index.md` | split contracts and four audience paths |
 | `docs/release-notes.md` | 重写 | `docs/release-notes.md` | scripts/release-assets.py consumes this file; release workflow signing/updater inputs; retain user-facing body |
 | `docs/release-notes.zh-CN.md` | 重写 | `docs/release-notes.zh-CN.md` | scripts/release-assets.py consumes this file; release workflow signing/updater inputs; retain user-facing body |
-| `docs/releasing.md` | 保留 | `docs/releasing.md` | scripts/release-assets.py; scripts/build-desktop.ps1; .github/workflows |
+| `docs/releasing.md` | 校正并精简 | `docs/releasing.md` | .github/workflows/desktop-release.yml; remove old branch and version history; retain immutable tags, signing and release gates |
 | `docs/runs.md` | 保留 | `docs/runs.md` | backend/runs; backend/runs/manager.py; backend/tests |
-| `docs/sandbox-networking.md` | 保留 | `docs/sandbox-networking.md` | backend/sandbox; backend/tests/test_sandbox_network_contract.py |
-| `docs/sandbox-workspace.md` | 保留 | `docs/sandbox-workspace.md` | backend/sandbox_workspace.py; backend/tests/test_sandbox_workspace_ui.py |
+| `docs/sandbox-networking.md` | 校正 | `docs/sandbox-networking.md` | Windows WFP and Linux networking implementation/tests; retain reproducible native procedure; remove dated platform acceptance claims |
+| `docs/sandbox-workspace.md` | 校正 | `docs/sandbox-workspace.md` | backend sandbox/runtime contracts; link to native procedures without promising prior acceptance |
 | `docs/security.md` | 保留 | `docs/security.md` | backend/capabilities; backend/packs; backend/sandbox; corresponding negative tests |
 | `docs/shared-python-runtime.md` | 保留 | `docs/shared-python-runtime.md` | backend/sandbox/environment.py; backend/packs; scripts/setup.py |
 | `docs/state.md` | 保留 | `docs/state.md` | backend/state; backend/tests/test_state.py |
-| `docs/terrain-webgl.md` | 保留 | `docs/terrain-webgl.md` | frontend/src/canvas; frontend/src/canvas/terrain.ts; retained rendering boundaries |
-| `docs/tool-execution.md` | 保留 | `docs/tool-execution.md` | backend/agents/tool_execution.py; backend/capabilities; backend/agents |
+| `docs/terrain-webgl.md` | 精简 | `docs/terrain-webgl.md` | TerrainBackground / TerrainRendererWebGL; keep resource budgets and diagnostics; remove retired-renderer story and past fixture results |
+| `docs/tool-execution.md` | 精简 | `docs/tool-execution.md` | backend/agents/tool_execution.py and test_tool_execution.py; retain cancellation/failure contract; remove coverage recital |
 | `docs/tutorial.md` | 重写 | `docs/tutorial.md` | steps/controller/Onboarding and progressive tutorial definitions |
 | `docs/tutorial.zh-CN.md` | 重写 | `docs/tutorial.zh-CN.md` | same tutorial sources |
 | `docs/user-guide/canvas.md` | 校正 | `docs/user-guide/canvas.md` | frontend/src/cards/CardFrame.tsx; frontend/src/state/worldStore.ts; backend/plugins/builtin.py |
 | `docs/user-guide/first-team.md` | 重写 | `docs/user-guide/first-team.md` | Onboarding.tsx; steps.ts; backend/plugins/builtin.py relationships; Text resource and Conversation UI |
 | `docs/user-guide/index.md` | 重写 | `docs/user-guide/index.md` | Onboarding.tsx; HelpMenu.tsx |
 | `docs/user-guide/index.zh-CN.md` | 重写 | `docs/user-guide/index.zh-CN.md` | onboarding; HelpMenu; PackStore; VersionPanel |
-| `docs/user-guide/matcreator-example.zh-CN.md` | 保留 | `docs/user-guide/matcreator-example.zh-CN.md` | plugins/matcreator; plugins/knowledge_base; frontend/src/legions |
+| `docs/user-guide/matcreator-example.zh-CN.md` | 重写 | `docs/user-guide/matcreator-example.zh-CN.md` | MatCreator 0.10.0 descriptor / API 1.36 manifest; native_card.py and native_runtime.py; current ExecutionGraph.tsx; remove old versions, source migration and acceptance narrative |
 | `docs/user-guide/models.md` | 重写 | `docs/user-guide/models.md` | model discovery and manual settings UI |
 | `docs/user-guide/plugins.md` | 重写 | `docs/user-guide/plugins.md` | Store client and installation UI |
 | `docs/user-guide/troubleshooting.md` | 保留 | `docs/user-guide/troubleshooting.md` | frontend/src/shell/HelpMenu.tsx; frontend/src/shell/helpChecks.ts |
@@ -236,10 +253,10 @@
 | `plugins/visualization/README.md` | 保留 | `plugins/visualization/README.md` | plugins/visualization/oaw.pack.toml；同目录 Python/前端实现及已有测试；插件功能未全部实跑 |
 | `plugins/visualization/src/oaw_visualization/docs/guide.en.md` | 保留 | `plugins/visualization/src/oaw_visualization/docs/guide.en.md` | plugins/visualization/oaw.pack.toml；同目录 Python/前端实现及已有测试；插件功能未全部实跑 |
 | `plugins/visualization/src/oaw_visualization/docs/guide.zh-CN.md` | 保留 | `plugins/visualization/src/oaw_visualization/docs/guide.zh-CN.md` | plugins/visualization/oaw.pack.toml；同目录 Python/前端实现及已有测试；插件功能未全部实跑 |
-| `plugins/xrd/README.md` | 保留 | `plugins/xrd/README.md` | plugins/xrd/oaw.pack.toml；同目录 Python/前端实现及已有测试；插件功能未全部实跑 |
+| `plugins/xrd/README.md` | 重写操作入口并校正 | `plugins/xrd/README.md` | InputDock.tsx / LibraryView.tsx / MatchControls.tsx; bundled engine.py; remove external PyWPEM requirement and test narrative |
 | `plugins/xrd/SQL_HISTORY.md` | 保留 | `plugins/xrd/SQL_HISTORY.md` | plugins/xrd/oaw.pack.toml；同目录 Python/前端实现及已有测试；插件功能未全部实跑 |
 | `plugins/xrd/TEMPLATE_CONTRACT.md` | 保留 | `plugins/xrd/TEMPLATE_CONTRACT.md` | plugins/xrd/oaw.pack.toml；同目录 Python/前端实现及已有测试；插件功能未全部实跑 |
-| `plugins/xrd/engines/README.md` | 校正 | `plugins/xrd/engines/README.md` | build.sh; qualx-1.0.5-oaw.patch; deployment helper; preserved source/license provenance |
+| `plugins/xrd/engines/README.md` | 校正 | `plugins/xrd/engines/README.md` | bundled OAW_XRDfit; preserve QualX source/license attribution; remove manual PyWPEM patch instruction and obsolete external-tree test command |
 | `project_plan.md` | 删除 | —（不另存副本） | obsolete POC plan; current concepts/architecture cover supported behavior; inbound links checked |
 
 ## 新增文件
@@ -262,11 +279,11 @@
 | `docs/user-guide/models.zh-CN.md` | ModelConnectionWizard.tsx; Models settings; Storage settings |
 | `docs/user-guide/plugins.zh-CN.md` | CardLibrary.tsx; PackStore.tsx; PackInstallations; passive activation |
 | `plugins/atomsculptor/docs/diagnostics.md` | scripts/export-atomsculptor-test.py; shared run invocation storage |
-| `plugins/atomsculptor/docs/modelling-contract.md` | execution_steps.py; workflow_evidence; skill_cli.py; source measurement schemas |
+| `plugins/atomsculptor/docs/modelling-contract.md` | harness.py / test_harness.py: retired cumulative token cap; execution_steps.py and measurement schemas; retain current scientific validation boundaries |
 | `plugins/knowledge_base/docs/agent-contract.md` | knowledge_base capabilities, revisioned stores and authorization tests |
 | `plugins/knowledge_base/docs/standalone.md` | knowledge_base standalone HTTP/MCP/CLI and layering tests |
 | `plugins/knowledge_base/docs/workflows.md` | knowledge_base frontend workflow routes; source/draft/experiment stores |
-| `plugins/matcreator/docs/runtime.md` | oaw_matcreator_engine; native worker; host execution/dependency protocols |
+| `plugins/matcreator/docs/runtime.md` | current descriptor/manifest and ExecutionGraph.tsx; runtime authorization/recovery contract; removed stale version and lens claims |
 | `docs/internal/documentation-reset.md` | 本次完整清单、验证层次与未完成的环境验证；不进入公开文档 |
 
 ## 非 Markdown 入口、教程与测试

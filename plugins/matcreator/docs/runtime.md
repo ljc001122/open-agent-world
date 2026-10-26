@@ -18,12 +18,10 @@ priority; compression triggers on budget pressure, not every three turns.
 Checkpoints are private to each native session/branch/agent and preserve the
 original event history. A normal final reply does not start a post-turn summary.
 
-The engine was adapted from AI4MS/MatCreator revision
-`0328c8b814499cbf3e49116323cee050145fa08f`. Its import provenance is recorded in
-[`oaw_matcreator_engine/UPSTREAM.json`](../oaw_matcreator_engine/UPSTREAM.json);
-this is historical attribution, not a runtime lock. See
-[engine ownership](../oaw_matcreator_engine/UPSTREAM.md) for the retained modules
-and the OAW adaptations.
+Engine attribution and adaptation boundaries are recorded in
+[UPSTREAM.md](../oaw_matcreator_engine/UPSTREAM.md). The current Pack and required
+API versions are declared in [pyproject.toml](../pyproject.toml) and
+[oaw.pack.toml](../oaw.pack.toml).
 
 Source setup, desktop packaging and schema 3 `.oawpack` installation use the
 same declared environment and host-owned preparation provider. In
@@ -140,40 +138,18 @@ Artifacts are verified through the current OAW artifact read capability, using
 as host files. Native `success` and OAW Run success remain execution claims, not
 proof of scientific correctness.
 
-Validation includes host deployment/template/session/revocation checks and a
-real Pack-engine + ADK test with a deterministic local model endpoint. Set
-`OAW_MATCREATOR_MANAGED=1` after normal plugin setup. It exercises planning,
-checkpoint reload, execution, recursive child tools and final graph status.
-An additional isolated test rejects imports of external MatCreator, OAW core,
-and the old standalone knowledge stack, and checks dependency joins, recovery,
-artifact references and revoked access. This is not a real-model or scientific
-calculation benchmark.
-
-Source Packs and published archives share the same dependency declaration and
-managed installation providers. Archive builds include the engine, worker files
-and declared verification resources, so Store installation prepares the same
-native environment. See [Pack distribution](../../../docs/pack-distribution.md) for
-build, install, readiness and uninstall behavior. Installing a Pack does not
-run scientific calculations or configure its external prerequisites.
-
-
 ## Execution history and dependency evidence
 
-Pack 0.9 requires OAW plugin API 1.35. The Pack records immutable Step attempts,
+The Pack records immutable Step attempts,
 plan identities, timestamps, retry/replan links and versioned artifact producers.
 The host stores a full read-only projection with each Run and exposes authorized,
 revision-consistent pages. A completed Conversation turn does not turn unfinished
 Steps into successes. New turns retain the previous graph until their first
 projection arrives; the stable history ID preserves selection across these turns.
 
-The default view uses at most three chronological tracks. Older completed groups
-fold automatically; running, failed and waiting work remains visible. Cross-execution
-references name their real sources without drawing long lines through unrelated
-history. Clicking one reveals its actual target Step and local dependencies.
-Execution expansion, Step graph, additional dependency hops, focus and return all
-use the same node identities. Virtualized history rows and a bounded local graph
-keep 300?500px panels usable. The local lens shows at most 160 nodes with an
-explicit limit notice; continue by selecting a related node.
+The host renders attempts and inline details through the shared
+[execution history viewer](../../../docs/developers/execution-graph.md#built-in-graph-presentation).
+The Pack does not own a separate dependency-lens or Step-graph interface.
 
 `consumed_inputs` explicitly names a successful `step_id`, a same-plan predecessor
 `node_id`, or a versioned `artifact_ref`. A data edge is recorded when the result
@@ -192,7 +168,7 @@ resource access and scientific execution remain Pack-owned.
 
 ## Long computations
 
-Native steps can now return `waiting` with host `job_ids`. Submission identities
+Native steps can return `waiting` with host `job_ids`. Submission identities
 are recorded before the remote call, and the host saves the provider ID before
 returning it to the model. A waiting workflow checkpoints and releases its worker.
 When external work settles, the host starts a bounded continuation that restores
@@ -217,9 +193,7 @@ timeout or exception. Partial diagnostic events remain available. Provider succe
 does not prove trajectory quality or scientific acceptance.
 
 See the host's [waiting and recovery contract](../../../docs/execution.md#long-computations-and-durable-waiting-api-133)
-for Stop, cancellation, resource deletion and restart behavior. Controlled tests
-cover host persistence and native worker recovery; real Bohrium service behavior,
-multi-day computation and installed desktop operation require separate validation.
+for Stop, cancellation, resource deletion and restart behavior.
 
 
 ## Skill package provenance
@@ -263,16 +237,14 @@ complete original adapted package bytes and source provenance. Download snapshot
 from the Window. A snapshot's `package` value is an ordinary `SkillPackage` and can
 be exported using `open_agent_world.skill_packages.export_plugin`. This is recovery
 of the consumed source package; publishing selected evolved graph knowledge is
-not implemented in this milestone.
+not supported.
 
 Search/expansion responses are bounded (default 60, maximum 200 plus explicitly
 requested roots), with type, relationship, source, trust and memory filters.
 Full bodies and resources load only on inspection. Backend queries currently scan
 the host-owned document; they do not require a second persistence database.
-The Window renders the progressive working subgraph with the host's shared
-NetworkMap (Sigma/Graphology), preserving graph ownership and inspection. A
-1,200-entry contract fixture verifies bounded paging; it is not a performance
-benchmark of all possible graph shapes.
+The Window renders the working subgraph through the host's shared NetworkMap,
+with details loaded on inspection.
 
 
 ## Verification commands

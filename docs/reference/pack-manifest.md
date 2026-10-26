@@ -110,7 +110,7 @@ must match the locked wheel bytes. Host-provided libraries survive Pack uninstal
 This shared namespace is not process isolation; incompatible engines
 belong in a separate host worker. AtomSculptor and Card Factory use public SDK
 facets. Frontend libraries are bundled by the author; end users do not run npm. All repository
-Packs with a frontend now own a package manifest, lockfile and independent build.
+Packs with a frontend own a package manifest, lockfile and independent build.
 They import host contracts through `@oaw/plugin-api`. XRD obtains the Structure
 Viewer's renderer through a named frontend service, without importing its source
 or bundling its scientific viewer dependencies a second time.
@@ -224,9 +224,9 @@ module roots and wheel metadata, and includes declared runtime resources. It
 does not run arbitrary build or setup commands. Declare adapter package roots in
 `tool.hatch.build.targets.wheel.packages`; host-private `backend.*` imports must
 be migrated before release. The final archive is checked by the same validator
-used for installation. The old raw-directory `build` command has been removed;
-author code-capable Packs with `build-project`. Schema 2's existing content
-exporter remains code-free while future visual authoring is designed separately.
+used for installation. Use `build-project` for code-capable Packs; the retired
+raw-directory `build` command is unsupported. Schema 2 uses the separate
+[content Pack exporter](../creator-packs.md).
 
 `resolve-adapter` is an explicit author/setup operation. It uses isolated build
 tools, pins the current shared host versions, and builds pinned HTTPS Git sources

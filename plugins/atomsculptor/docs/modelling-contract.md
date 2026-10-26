@@ -340,19 +340,19 @@ Configure model action limits with `model_action_seconds`,
 These action controls apply to staged team modelling; typed panel operations and
 explicit direct Builder mode keep their existing behaviour. A model that still
 cannot act ends with an explicit failure rather than an unbounded reasoning loop.
-Output-limit recovery is separate from action/deadline and transport recovery.
-Its single retry requests an executable action, measured plan review or actual
-blocker, without automatically reducing OAW's selected output limit. Subsequent
-specialist requests also inherit that limit. Reasoning on compatible providers
-may consume generation allowance before a tool is emitted; action-focused
-instructions are not evidence that a smaller allowance is sufficient. Truncated
-tool calls never dispatch. Optional `specialist_output_tokens` and
-`recovered_action_output_tokens` are null by default; explicit custom caps and
-remaining cumulative budgets still apply. The exact old persisted policy
-(16384 specialist / 65536 cumulative / absent or 4096 recovery) migrates to
-inherited per-request limits and a 262144 cumulative budget on config validation,
-without database edits. Other customized cap combinations are preserved.
-The 600-second ceiling and native idle watchdog remain unchanged.
+Output-limit recovery permits one report/action retry. Truncated tool calls never
+dispatch. The selected OAW model sets the per-request output limit; reasoning may
+consume that allowance on compatible providers. `specialist_output_tokens` and
+`recovered_action_output_tokens` default to null, inheriting that limit. Explicit
+role caps can lower it. There is no cumulative Run output-token budget, and token
+usage does not shrink the next request's allowance.
+
+Retired `harness.max_output_tokens` and `closeout_reserve_tokens` fields are dropped
+when old cards load. The exact former 16384 specialist / 65536 cumulative / absent
+or 4096 recovery default policy becomes inherited per-request limits. Customized
+role caps remain supported. Request deadlines and the stream watchdog apply
+independently of token limits.
+
 Recovery replaces the prior host evidence snapshot while retaining user input,
 tool calls, signatures and results. Identical unsigned `start_sandbox` calls in
 one complete accepted response are coalesced before dispatch; other calls,
@@ -403,16 +403,10 @@ history and full decisions remain in existing OAW invocation records. Execution
 step snapshots contain receipt references rather than duplicate questions and
 responses. No model-generated code is executed by the host.
 
-The selected OAW model controls per-request output. Retired cumulative
-`harness.max_output_tokens` and `closeout_reserve_tokens` settings are discarded
-when loading old cards and omitted from new schemas. Usage does not shrink the
-next request's limit. The default total wall-clock limit remains disabled;
-network recovery uses OAW's native request policy.
-
 The bundled Skills share one maintained `skill_cli.py` source, injected as
 `scripts/oaw_runtime.py` during SkillPackage assembly. Each materialized Skill
-remains standalone. Version 0.1.9 adds optional topology, local-geometry, symmetry
-and explicit-calculator instruments to structure-inspect. Update external Skill
+remains standalone. Structure-inspect provides optional topology, local-geometry,
+symmetry and explicit-calculator instruments. Update external Skill
 cards manually when using them instead of the built-in package. Interface
 catalogue entries are unverified drafts; selecting one must validate and convert
 the saved file before importing it.

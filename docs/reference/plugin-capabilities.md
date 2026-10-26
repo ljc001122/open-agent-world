@@ -322,7 +322,7 @@ new data root after reviewing it. A failed copy retains `MIGRATION_INCOMPLETE`.
 Existing Legion templates, multi-Agent snapshots, unsupported resource types,
 and direct-to-template capability scopes require restoration in the old version
 first; migration refuses to flatten team context or widen a capability scope.
-No migration has been run against the user's live data automatically.
+Startup does not run this migration automatically.
 
 ## Trust and security boundary
 
@@ -341,8 +341,3 @@ No migration has been run against the user's live data automatically.
   privileged operation.
 - Plugin frontends execute trusted browser code. Import host services through
   `@oaw/plugin-api`; rendering error boundaries are not a security sandbox.
-
-The Greeter integration test verifies editable entry-point discovery, descriptor
-ownership, independent runtime state across registries, lifecycle updates,
-canonical graph orientation, Agent tool invocation, validation, and immediate
-permission revocation.
