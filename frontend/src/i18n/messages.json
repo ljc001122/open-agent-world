@@ -7521,9 +7521,9 @@
     "Drag cards into your deck below",
     "将卡片拖入下方卡组"
   ],
-  "Drag Text, Agent, Conversation and Sandbox into your deck below. You can create a new deck there, too.": [
-    "Drag Text, Agent, Conversation and Sandbox into your deck below. You can create a new deck there, too.",
-    "将 Text、Agent、Conversation 和 Sandbox 拖入下方卡组。也可以在那里新建卡组。"
+  "Drag Text file, Agent, Conversation and Sandbox into your deck below. You can create a new deck there, too.": [
+    "Drag Text file, Agent, Conversation and Sandbox into your deck below. You can create a new deck there, too.",
+    "将文本文件、智能体、对话和 Sandbox 拖入下方卡组。也可以在那里新建卡组。"
   ],
   "You can also click Add to current deck. Switch decks using the tabs below.": [
     "You can also click Add to current deck. Switch decks using the tabs below.",
@@ -7869,5 +7869,6 @@
   "Check and export the Pack first. On the website, sign in and select the saved .oawpack file yourself. Opening the page does not upload the file. Submission enters review; it does not immediately become public.": ["Check and export the Pack first. On the website, sign in and select the saved .oawpack file yourself. Opening the page does not upload the file. Submission enters review; it does not immediately become public.", "请先检查并导出卡包。在网站登录后，需手动选择已保存的 .oawpack 文件。打开页面不会上传文件。提交后进入审核，不会立即公开。"],
   "To submit this Pack, replace its local.* ID with an ID under your authorized Marketplace namespace, then check and export again.": ["To submit this Pack, replace its local.* ID with an ID under your authorized Marketplace namespace, then check and export again.", "如需投稿，请将 local.* ID 改为你获授权的 Marketplace 命名空间下的 ID，然后重新检查并导出。"],
   "Select this exported file on the website:": ["Select this exported file on the website:", "请在网站选择此导出文件："],
-  "If the page does not open, copy this address into your browser:": ["If the page does not open, copy this address into your browser:", "如果页面未打开，请复制此地址到浏览器："]
+  "If the page does not open, copy this address into your browser:": ["If the page does not open, copy this address into your browser:", "如果页面未打开，请复制此地址到浏览器："],
+  "Card / Pack developer guide": ["Card / Pack developer guide", "卡片与卡包开发"]
 }

@@ -30,9 +30,30 @@ describe('bundled manual', () => {
       for (const page of pages) expect(documentation[page]).toBeDefined();
     }
     expect(localizedPage('user-guide/index.md', 'zh-CN')).toBe('user-guide/index.zh-CN.md');
-    expect(localizedPage('user-guide/models.md', 'zh-CN')).toBe('user-guide/models.md');
+    expect(localizedPage('user-guide/models.md', 'zh-CN')).toBe('user-guide/models.zh-CN.md');
     expect(documentationGroups('zh-CN').find(group => group.title === 'Contribute to OAW')?.pages)
       .toContain('contributing/hosting.zh-CN.md');
+  });
+
+  it('uses the same audience for every website and offline topic, including translations', () => {
+    const nav = siteConfig.slice(siteConfig.indexOf('\nnav:'));
+    const canonical = (path: string) => path.replace(/\.zh-CN\.md$/, '.md');
+    const website = new Map<string, string[]>();
+    let audience = '';
+    for (const line of nav.split('\n')) {
+      const group = line.match(/^  - ([^:]+):\s*$/);
+      if (group) { audience = group[1]; website.set(audience, []); }
+      const page = line.match(/^      - ([\w./-]+\.md)\s*$/);
+      if (page) website.get(audience)!.push(canonical(page[1]));
+    }
+    for (const locale of ['en', 'zh-CN'] as const) {
+      const groups = documentationGroups(locale);
+      expect(groups.map(group => group.title)).toEqual([...website.keys()]);
+      for (const group of groups) {
+        expect(group.pages.map(canonical).sort(), `${locale}: ${group.title}`)
+          .toEqual([...new Set(website.get(group.title))].sort());
+      }
+    }
   });
 
   it('keeps relative pages, published URLs, translated pages and anchors local', () => {

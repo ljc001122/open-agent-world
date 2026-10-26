@@ -1,6 +1,6 @@
 # Persistent card finishes
 
-Pack opening assigns a single print finish to each newly acquired collection entry. The authoritative probability table is `backend/card_finishes.py::CARD_FINISH_WEIGHTS`: normal 72%, foil 16%, rainbow 6%, starlight 4%, laser 2%. The small `weighted_choice` utility accepts one random sample, supports relative and zero weights, and validates its inputs. Pack generation previously had no seeded random stream.
+Pack opening assigns a single print finish to each newly acquired collection entry. The authoritative probability table is `backend/card_finishes.py::CARD_FINISH_WEIGHTS`: normal 72%, foil 16%, rainbow 6%, starlight 4%, laser 2%. The small `weighted_choice` utility accepts one random sample, supports relative and zero weights, and validates its inputs.
 
 ## Ownership and persistence
 

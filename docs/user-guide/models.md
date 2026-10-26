@@ -1,5 +1,7 @@
 # Models and settings
 
+[简体中文](models.zh-CN.md)
+
 An Agent needs a model connection to respond. A connection tells OAW which service to use and how to sign in; a model selects the specific model offered by that service.
 
 ## Connect a model
@@ -12,7 +14,7 @@ An Agent needs a model connection to respond. A connection tells OAW which servi
 
 Open your Agent's settings and select the model. Existing Agents can keep their own model selection, so changing the default does not necessarily change every Agent.
 
-Model lists are entered manually. If a model does not appear, add it to an enabled connection first.
+The **Connect AI** wizard can retrieve model metadata from supported providers. Use manual setup when the service cannot list models or needs a custom configuration. A successful listing does not verify generation or tool support. Test the connection with [your first task](first-team.md). Local service addresses are reached from the backend machine.
 
 ## Update credentials
 

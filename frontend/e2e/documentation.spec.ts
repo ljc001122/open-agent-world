@@ -1,11 +1,16 @@
 import { expect, test } from '@playwright/test';
 
-test('bundled documentation works with no external network, native modal focus and responsive layouts', async ({ page }) => {
+test('bundled documentation works with no external network, native modal focus and responsive layouts', async ({ page, request }) => {
   test.setTimeout(90_000);
-  await page.addInitScript(() => {
-    localStorage.setItem('oaw.locale', 'en');
-    localStorage.setItem('oaw-onboarding-v1', JSON.stringify({ state: { status: 'skipped' }, version: 1 }));
-  });
+  const profile = await (await request.get('/api/application')).json();
+  const preferences = await request.patch('/api/application/preferences', { data: {
+    profile_id: profile.profile_id, generation: profile.generation,
+    changes: {
+      'oaw.locale': 'en', 'oaw-theme': 'light',
+      'oaw-onboarding-v1': JSON.stringify({ state: { status: 'skipped' }, version: 1 }),
+    },
+  } });
+  expect(preferences.ok()).toBe(true);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const external: string[] = [];
   await page.route('**/*', route => {
@@ -45,13 +50,15 @@ test('bundled documentation works with no external network, native modal focus a
   await page.screenshot({ path: 'test-results/documentation-zh-dark.png' });
   for (const width of [800, 390]) {
     await page.setViewportSize({ width, height: 800 });
-    const bounds = await chinese.boundingBox();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    expect(await chinese.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(async () => {
+      const bounds = await chinese.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      expect(await chinese.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }).toPass();
     await chinese.getByRole('searchbox').fill('oawpack');
-    await chinese.getByRole('button', { name: 'Packs and cards', exact: true }).click();
-    await expect(chinese.getByRole('heading', { name: 'Packs and cards', level: 1 })).toBeVisible();
+    await chinese.getByRole('button', { name: '卡包与牌组', exact: true }).click();
+    await expect(chinese.getByRole('heading', { name: '卡包与牌组', level: 1 })).toBeVisible();
     await chinese.getByRole('searchbox').fill('');
     await page.screenshot({ path: `test-results/documentation-${width}.png` });
   }

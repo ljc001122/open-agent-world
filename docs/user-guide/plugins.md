@@ -1,5 +1,7 @@
 # Packs and cards
 
+[简体中文](plugins.zh-CN.md)
+
 Packs add cards and tools to your world. Open a Pack to collect its cards, choose
 which belong in your Deck, then place them in your World.
 
@@ -61,8 +63,7 @@ Open it, add its cards to your Deck and place them in your World.
 **Update available** offers an explicit **Update** action; OAW does not update
 Packs automatically. If the Store is unavailable, use **Retry** later. Your
 existing Packs, Cards, Deck and World keep working. OAW connects to the official
-Marketplace at `https://open-agent-world.space` automatically. Development host
-overrides are described in [Pack Store Client V0](../pack-store.md).
+Marketplace at `https://open-agent-world.space` automatically. Install required dependency Packs first if the installation plan reports them.
 
 ## Disable or remove a Pack
 
@@ -78,4 +79,5 @@ An inactive version can be removed after it is neither selected nor loaded.
 Core functionality stays enabled. Source, bundled and downloaded Packs share
 the same enrollment and cleanup checks.
 
-To create your own, see [Pack installation and distribution](../pack-distribution.md).
+Create cards without code in [Card Factory](../card-factory.md), or build a
+Python/React Card App with the [developer guide](../developers/index.md).

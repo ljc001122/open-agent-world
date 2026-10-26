@@ -22,7 +22,8 @@ window. Tools supplied only by the desktop UI are not automatically inherited.
 Requirements: the repository's prepared backend/frontend dependencies, Node.js,
 and a working native Codex CLI (`codex.exe`). Run `codex login` if needed.
 The plugin uses Codex's own login and configuration; do not paste tokens into
-an OAW card. Tested against Codex CLI **0.153.0** and desktop runtime **0.153.4**.
+an OAW card. The integration uses experimental App Server fields; verify the
+installed runtime with the checks below before relying on it.
 
 From the repository root:
 

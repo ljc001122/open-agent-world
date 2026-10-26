@@ -26,16 +26,93 @@ export const documentation = Object.fromEntries(Object.entries(sources).map(([pa
 export const documentationAssets = Object.fromEntries(Object.entries(assets)
   .map(([path, url]) => [path.replace('../../../docs/', ''), url]));
 
-const userPages = ['README.md', 'user-guide/index.md', 'install.md', 'user-guide/first-team.md',
+const userPages = [
+  'README.md',
+  'user-guide/index.md',
+  'install.md',
+  'user-guide/first-team.md',
+  'user-guide/models.md',
+  'user-guide/canvas.md',
+  'user-guide/plugins.md',
+  'creator-packs.md',
+  'card-factory.md',
+  'user-guide/troubleshooting.md',
   'product-first-use.md',
-  'user-guide/models.md', 'user-guide/canvas.md', 'user-guide/plugins.md', 'creator-packs.md',
-  'user-guide/troubleshooting.md', 'user-guide/matcreator-example.zh-CN.md'];
-const developerPages = ['developers/index.md', 'developers/setup.md', 'developers/first-plugin.md',
-  'developers/agent-tools.md', 'developers/frontend.md', 'developers/testing.md',
-  'pack-distribution.md', 'pack-store.md', 'developers/extension-points.md'];
-const contributorPages = ['contributing/index.md', 'getting-started.md', 'architecture.md',
-  'enterprise-foundations.md', 'tutorial.md', 'desktop.md', 'deployment.md', 'contributing/hosting.zh-CN.md', 'releasing.md',
-  'release-notes.md', 'developers/documentation.md', 'contributing/docs-checklist.md'];
+  'user-guide/matcreator-example.zh-CN.md',
+];
+const developerPages = [
+  'developers/index.md',
+  'developers/card-app.md',
+  'developers/setup.md',
+  'developers/quickstart-pack.md',
+  'developers/declarative-packs.md',
+  'developers/testing.md',
+  'developers/pack-ide.md',
+  'developers/first-plugin.md',
+  'developers/agent-tools.md',
+  'developers/frontend.md',
+];
+const referencePages = [
+  'reference/index.md',
+  'plugins.md',
+  'reference/plugin-registration.md',
+  'reference/plugin-documents.md',
+  'reference/plugin-capabilities.md',
+  'reference/plugin-lifecycle.md',
+  'reference/plugin-frontend.md',
+  'reference/plugin-compatibility.md',
+  'pack-distribution.md',
+  'reference/pack-manifest.md',
+  'pack-store.md',
+  'reference/factory-recipes.md',
+  'canvas-control.md',
+  'card-library.md',
+  'card-state.md',
+  'concepts.md',
+  'configuration.md',
+  'context-management.md',
+  'developers/card-design.md',
+  'developers/card-finishes.md',
+  'developers/context-compaction.md',
+  'developers/data-sources.md',
+  'developers/execution-graph.md',
+  'developers/extension-points.md',
+  'developers/progressive-tutorials.md',
+  'developers/workspace-design.md',
+  'execution-configuration.md',
+  'execution.md',
+  'layout.md',
+  'legions.md',
+  'lifecycle-artifacts.md',
+  'macos-seatbelt-network-extension.md',
+  'minister.md',
+  'node-effects.md',
+  'plugin-deployment.md',
+  'runs.md',
+  'sandbox-networking.md',
+  'sandbox-workspace.md',
+  'security.md',
+  'shared-python-runtime.md',
+  'state.md',
+  'tool-execution.md',
+];
+const contributorPages = [
+  'contributing/index.md',
+  'getting-started.md',
+  'architecture.md',
+  'desktop.md',
+  'deployment.md',
+  'contributing/hosting.zh-CN.md',
+  'releasing.md',
+  'release-notes.md',
+  'tutorial.md',
+  'enterprise-foundations.md',
+  'canvas-performance.md',
+  'graph-architecture.md',
+  'terrain-webgl.md',
+  'developers/documentation.md',
+  'contributing/docs-checklist.md',
+];
 const canonicalPage = (path: string) => path.replace(/\.zh-CN\.md$/, '.md');
 
 export function localizedPage(path: string, locale: Locale): string {
@@ -45,15 +122,9 @@ export function localizedPage(path: string, locale: Locale): string {
 }
 
 export function documentationGroups(locale: Locale) {
-  const seen = new Set([...userPages, ...developerPages, ...contributorPages].map(canonicalPage));
-  const referencePages = Object.keys(documentation).filter(path => {
-    const key = canonicalPage(path);
-    if (seen.has(key)) return false;
-    seen.add(key); return true;
-  }).sort((a, b) => documentation[a].title.localeCompare(documentation[b].title));
   return [
     { title: 'User guide', pages: userPages },
-    { title: 'Build plugins', pages: developerPages },
+    { title: 'Card / Pack developer guide', pages: developerPages },
     { title: 'Technical reference', pages: referencePages },
     { title: 'Contribute to OAW', pages: contributorPages },
   ].map(group => ({ ...group, pages: group.pages.map(path => localizedPage(path, locale)) }));

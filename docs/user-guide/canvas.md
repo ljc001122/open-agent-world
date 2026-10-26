@@ -1,5 +1,7 @@
 # Cards and connections
 
+[简体中文](canvas.zh-CN.md)
+
 ## Cards are your workspace
 
 Place cards from the bottom tray. Move and resize them to organize your work; open a card to see its contents and controls. Pan and zoom to navigate a larger world.

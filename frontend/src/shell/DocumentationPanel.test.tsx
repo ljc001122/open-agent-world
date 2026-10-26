@@ -51,9 +51,9 @@ it('switches an open topic to Chinese and labels English-only topics', () => {
   expect(screen.getByRole('heading', { name: '下载与安装', level: 1 })).toBeTruthy();
   expect(screen.queryByText('此主题目前提供英文文档。')).toBeNull();
   expect(screen.getByRole('heading', { name: '参与维护', level: 3 })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Models and settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Troubleshooting' }));
   expect(screen.getByText('此主题目前提供英文文档。')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Models and settings' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('button', { name: 'Troubleshooting' }).getAttribute('aria-current')).toBe('page');
 });
 
 it('follows section anchors and marks external destinations as online', () => {
@@ -64,7 +64,7 @@ it('follows section anchors and marks external destinations as online', () => {
   fireEvent.click(screen.getByRole('link', { name: 'Configuration' }));
   expect(screen.getByRole('heading', { name: 'Application storage' }).id).toBe('application-storage');
   expect(document.activeElement?.id).toBe('application-storage');
-  fireEvent.click(screen.getByRole('button', { name: 'Your AI team, on one canvas.' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Agent World documentation' }));
   const link = screen.getByRole('link', { name: /GitHub Releases/ });
   expect(link.getAttribute('title')).toBe('Opens online (internet required)');
   expect(link.getAttribute('target')).toBe('_blank');
