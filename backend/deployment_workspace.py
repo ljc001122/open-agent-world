@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from backend.api import artifacts, conversations, file_preview, job_board, node_documents, node_resources, resources, runtime
 from backend.api.dependencies import get_services
 from backend.api.knowledge_bridge import (
-    ExperimentExtractRequest, InsightExtractRequest, KnowledgeExtractRequest, RecordExtractRequest,
-    run_experiment_extract, run_insight_extract, run_knowledge_extract, run_record_extract,
+    ExperimentExtractRequest, InsightExtractRequest, ProjectSpaceRequest, ProjectionReviewRequest,
+    run_experiment_extract, run_insight_extract, run_project_space, run_projection_review, _stream,
 )
 from backend.node_documents import DocumentActionRequest, read_document, invoke_document_action
 from backend.node_resources import ResourceActionRequest, invoke_resource_action
@@ -253,27 +253,28 @@ def workspace_router(manifest):
         result = await invoke_resource_action(services, node_id, action, request)
         return {key: value for key, value in result.items() if key in actions[action]}
 
-    @router.post("/knowledge/{node_id}/knowledge")
-    async def knowledge_knowledge(node_id: str, request: KnowledgeExtractRequest, services=Depends(get_services)):
-        # The bridge itself never checks capability; a release only reaches it once
-        # both halves of the pipeline it drives are published for this node.
+    @router.post("/knowledge/{node_id}/project-space")
+    async def knowledge_project_space(node_id: str, request: ProjectSpaceRequest, services=Depends(get_services)):
         actions = manifest.get("plugin_access", {}).get(node_id, {}).get("resource_actions", {})
-        if not {"knowledge_drafts", "knowledge_extract_prompt", "knowledge_save"} <= set(actions):
+        if not {"projection_prepare", "projection_prompt", "projection_save", "projection_fail"} <= set(actions):
             raise HTTPException(404, "This operation is not published")
-        return await run_knowledge_extract(node_id, request, services)
+        request = request.model_copy(update={"model": services.world.get_card(node_id).config.get("default_model", "")})
+        return _stream(lambda progress: run_project_space(node_id, request, services, progress))
 
-    @router.post("/knowledge/{node_id}/records")
-    async def knowledge_records(node_id: str, request: RecordExtractRequest, services=Depends(get_services)):
+    @router.post("/knowledge/{node_id}/review-projection")
+    async def knowledge_projection_review(node_id: str, request: ProjectionReviewRequest, services=Depends(get_services)):
         actions = manifest.get("plugin_access", {}).get(node_id, {}).get("resource_actions", {})
-        if not {"record_extract_prompt", "record_save"} <= set(actions):
+        if not {"projection_review_prompt", "projection_revise"} <= set(actions):
             raise HTTPException(404, "This operation is not published")
-        return await run_record_extract(node_id, request, services)
+        request = request.model_copy(update={"model": services.world.get_card(node_id).config.get("default_model", "")})
+        return _stream(lambda progress: run_projection_review(node_id, request, services, progress))
 
     @router.post("/knowledge/{node_id}/extract")
     async def knowledge_extract(node_id: str, request: ExperimentExtractRequest, services=Depends(get_services)):
         actions = manifest.get("plugin_access", {}).get(node_id, {}).get("resource_actions", {})
         if not {"experiment_extract_prompt", "experiment_save"} <= set(actions):
             raise HTTPException(404, "This operation is not published")
+        request = request.model_copy(update={"model": services.world.get_card(node_id).config.get("default_model", "")})
         return await run_experiment_extract(node_id, request, services)
 
     @router.post("/knowledge/{node_id}/insights")
@@ -281,6 +282,7 @@ def workspace_router(manifest):
         actions = manifest.get("plugin_access", {}).get(node_id, {}).get("resource_actions", {})
         if not {"insight_prompt", "insight_save"} <= set(actions):
             raise HTTPException(404, "This operation is not published")
+        request = request.model_copy(update={"model": services.world.get_card(node_id).config.get("default_model", "")})
         return await run_insight_extract(node_id, request, services)
 
     for route in node_documents.router.routes:
