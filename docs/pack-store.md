@@ -47,6 +47,29 @@ versions. Retained versions remain managed by `PackInstallationManager.activate`
 an already selected immutable version is an idempotent Store result. The local
 file endpoint retains its existing duplicate-install behavior.
 
+## Pack previews
+
+Store catalog entries and details reuse `PackSurface`, the same procedural
+geometry and materials used by owned Packs. Rendering starts near the viewport,
+shares one GPU context, stops while idle, and releases offscreen models. Pointer
+drag and arrow keys rotate a Pack; selecting it opens details. Browsers without
+WebGL retain the CSS Pack cover and normal review/install controls.
+
+Public listing and version responses may include `preview` with `packaging`
+(`standard`, `premium`, `paper`, `collector`), a six-digit hex `accent_color`,
+and a nullable `count`. Marketplace derives these from the immutable Schema 2
+manifest's existing `creator` and `content` fields. Detail previews follow the
+reviewed version. Missing metadata, including existing Schema 3 distributions,
+uses the standard appearance with an unknown count. This does not download
+archives, execute Pack code, load remote shaders, or expose local artwork URLs.
+
+`npm run build:store-preview` in `frontend` exports the same component and lazy
+renderer into `.tmp/store-preview` for the standalone website. The website's
+`scripts/build-pack-preview.mjs` regenerates its committed static assets from
+this source; see that checkout's `docs/marketplace.md`. The adapter uses English
+copy without OAW profile storage. Publishing the website and deploying the
+catalog metadata change are separate from generating these assets locally.
+
 ## Acquisition and installation
 
 Every Get/Update fetches fresh metadata for the explicit version. There is no

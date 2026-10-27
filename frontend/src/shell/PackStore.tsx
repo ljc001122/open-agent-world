@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Search } from 'lucide-react';
+import { ArrowLeft, Search } from 'lucide-react';
 import { apiErrorMessage, worldApi } from '../api/client';
 import { t } from '../i18n';
 import type { PackInstallations, StoreDetail, StorePack, StorePage, StoreState, StoreVersion } from '../types/packs';
 import { PackPlanDetails } from './PackDependencies';
 import { packOperationPending, PackOperations } from './PackOperations';
+import { StorePackPreview } from './StorePackPreview';
 import './packStore.css';
 
 function InstallationStatus({ state }: { state: StoreState }) {
@@ -100,7 +101,10 @@ export function PackStore({ installations }: { installations?: PackInstallations
     {selected ? <>
       <button className="library-text-button" onClick={() => setSelected(undefined)}><ArrowLeft size={15} />{t('Back to Store')}</button>
       {shown && <article className="store-detail" aria-label={t('Pack details')}>
-        <div className="store-pack-emblem"><Archive size={32} /></div>
+        <div className="store-detail-preview"><StorePackPreview pack={{ ...shown,
+          latest_version: version?.version ?? shown.latest_version,
+          preview: version ? version.preview : shown.preview,
+        }} label={t('Pack details')} onClick={() => {}} /></div>
         <h3>{shown.name}</h3><p>{shown.summary}</p>
         <p className="store-description">{shown.description}</p>
         <InstallationStatus state={shown} />
@@ -124,9 +128,9 @@ export function PackStore({ installations }: { installations?: PackInstallations
       <div className="store-pack-grid">{page?.items.map(item => {
         const pack = merged(item);
         return <article key={pack.id} className="store-pack" data-store-pack-id={pack.id}>
-          <button className="store-pack-open" aria-label={t('View {v0} details', { v0: pack.name })} onClick={() => setSelected(pack.id)}>
-            <div className="store-pack-emblem"><Archive size={28} /></div><h4>{pack.name}</h4><p>{pack.summary}</p>
-          </button><div className="store-pack-footer"><InstallationStatus state={pack} />{action(pack)}</div>
+          <StorePackPreview pack={pack} onClick={() => setSelected(pack.id)} />
+          <div className="store-pack-copy"><h4>{pack.name}</h4><p>{pack.summary}</p></div>
+          <div className="store-pack-footer"><InstallationStatus state={pack} />{action(pack)}</div>
         </article>;
       })}</div>
       {loading && <p role="status">{t('Loading…')}</p>}

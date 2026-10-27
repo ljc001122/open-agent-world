@@ -14,6 +14,23 @@ const version: StoreVersion = { ...state, pack_id: pack.id, version: '0.10.0', s
 } };
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+it('uses authored packaging in the catalog and the reviewed version preview in details', async () => {
+  const preview = { packaging: 'premium' as const, accent_color: '#aa3366', count: 3 };
+  vi.spyOn(worldApi, 'getStorePacks').mockResolvedValue({ items: [{ ...pack, preview }], next_cursor: null });
+  vi.spyOn(worldApi, 'getStorePack').mockResolvedValue({ ...detail, preview });
+  vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue({ ...version, preview: { ...preview, packaging: 'collector' } });
+  const install = vi.spyOn(worldApi, 'installStorePack');
+  const view = render(<PackStore />);
+  const open = await screen.findByRole('button', { name: 'View Greeter details' });
+  expect(view.container.querySelector('.library-pack')?.getAttribute('data-packaging')).toBe('premium');
+  expect(view.container.querySelector('.library-pack')?.getAttribute('style')).toContain('#aa3366');
+  expect(view.container.querySelector('.library-pack')?.getAttribute('data-renderer')).toBe('fallback');
+  fireEvent.click(open);
+  await screen.findByText('colorama==0.4.6');
+  expect(view.container.querySelector('.library-pack')?.getAttribute('data-packaging')).toBe('collector');
+  expect(install).not.toHaveBeenCalled();
+});
+
 it('searches and paginates with the server cursor', async () => {
   const catalog = vi.spyOn(worldApi, 'getStorePacks').mockResolvedValueOnce({ items: [pack], next_cursor: pack.id })
     .mockResolvedValueOnce({ items: [{ ...pack, id: 'example.next', name: 'Next' }], next_cursor: null })
