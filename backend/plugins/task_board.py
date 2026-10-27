@@ -1,13 +1,13 @@
 """Task planning and dependency rules; no host-private services or UI code."""
 from __future__ import annotations
-from open_agent_world.plugin_api import PackDefinition, ScopedStateSpec
+from open_agent_world.plugin_api import ScopedStateSpec
 from open_agent_world.task_graph import validate_task_graph
 from typing import Literal
 import json
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from open_agent_world.plugin_api import (
     CapabilityGrantDefinition, NodeDocumentAction, NodeDocumentDefinition,
-    NodeTypeDefinition, PluginDescriptor, RelationshipDefinition, ResourceValidationError,
+    NodeTypeDefinition, RelationshipDefinition, ResourceValidationError,
     ExecutionPolicy, NodeExecutionDefinition, WorkItem, WorkOutcome,
 )
 
@@ -146,74 +146,66 @@ def execution_policy(value):
     settings = Board.model_validate(value).execution
     return ExecutionPolicy(max_parallel=settings.max_parallel, pause_on_failure=settings.pause_on_failure)
 
-class TaskBoardPlugin:
-    descriptor = PluginDescriptor(id=PREFIX, version="0.2.1", plugin_api_version="1.23", name="Task Board", description="Shared planning with optional Agent execution.")
-
-    def register(self, registration):
-        actions = {"read": (read, Empty), "upsert": (upsert, Upsert), "progress": (progress, Progress), "remove": (remove, Remove)}
-        grants = {}
-        documents = {}
-        for action, (handler, model) in actions.items():
-            kind = f"{PREFIX}.{action}"
-            documents[action] = NodeDocumentAction(handler, capability_kind=kind, read_only=action == "read")
-            async def invoke(context, capability, arguments, action=action):
-                arguments = dict(arguments)
-                revision = arguments.pop("expected_revision", None)
-                if revision is not None and (type(revision) is not int or revision < 0):
-                    raise ResourceValidationError("expected_revision must be a non-negative integer")
-                return await context.node_document_action(capability, action, arguments, revision)
-            registration.register_capability_handler(kind, invoke)
-            schema = model.model_json_schema()
-            if action == "upsert":
-                schema["properties"]["tasks"]["description"] = 'List of task objects: {id: "step_name", title: "Do work", description: "", status: "todo|doing|done|blocked", depends_on: ["other_id"], note: ""}. Only id and title are required for new tasks. Existing tasks are replaced, so preserve all their fields when editing.'
-            if action != "read":
-                schema["properties"]["expected_revision"] = {"type": "integer", "minimum": 0, "description": "Latest board revision returned by read_tasks. Re-read after a conflict."}
-                schema.setdefault("required", []).append("expected_revision")
-            descriptions = {
-                "read": "Read tasks and ready_ids from {target_name!r}. Dependencies must finish before a task starts. Execution requires separate permission; reading or editing never starts Agents.",
-                "upsert": "Create or replace tasks in {target_name!r}; omitted tasks remain. Read first and preserve existing progress when editing. Use depends_on for prerequisite task IDs.",
-                "progress": "Update only task status and note in {target_name!r}. Cannot change titles or dependencies. Mark done only after the task's work is actually finished.",
-                "remove": "Delete a task from {target_name!r}; remove incoming dependencies first.",
-            }
-            grants[action] = CapabilityGrantDefinition(kind=kind, tool_prefix={"read":"read_tasks", "upsert":"write_tasks", "progress":"update_task_progress", "remove":"delete_task"}[action], description=descriptions[action], input_schema=schema)
-        documents["configure_execution"] = NodeDocumentAction(configure)
-        async def control(context, capability, arguments):
-            arguments = {key: value for key, value in arguments.items() if value is not None}
-            action = arguments.pop("action", "read")
-            return await context.node_execution_action(capability, action, arguments)
-        registration.register_capability_handler(f"{PREFIX}.execute", control)
-        execution_grant = CapabilityGrantDefinition(kind=f"{PREFIX}.execute", tool_prefix="control_task_execution",
-            description="Read execution history, start ready work (or retry one item_id), or stop {target_name!r}. Start requires the latest document expected_revision. Work runs as an independent batch; use stop explicitly to cancel it.",
-            input_schema={"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["read", "start", "stop"], "description": "read, start, or stop"},
-                "item_id": {"type": "string", "description": "Optional task ID to run or retry only this task; omit to run ready work."},
-                "expected_revision": {"type": "integer", "description": "Latest board revision; required for start. Omit for read/stop."}}, "required": ["action"]})
-        registration.register_relationship(RelationshipDefinition(id=f"{PREFIX}.executor", label="Execute with", short_label="executor",
-            description="Allow this work source to dispatch tasks to this Agent. Task access is granted separately.",
-            source_traits=frozenset({"oaw.task-board"}), target_traits=frozenset({"core.agent"}), templateable=True))
-        registration.register_relationship(RelationshipDefinition(canvas_requires_confirmation=True, id=f"{PREFIX}.control", label="Control execution", short_label="execution",
-            description="Read tasks and explicitly start or stop work; does not grant plan editing.",
-            source_traits=frozenset({"core.agent"}), target_traits=frozenset({"oaw.task-board"}),
-            capabilities=(grants["read"], execution_grant), templateable=True))
-        registration.register_node_type(NodeTypeDefinition(
-            id=PREFIX, label="Task Board", description="Plan tasks and dependencies; share only the permissions each Agent needs.", icon="workflow", color="#6c827d",
-            deck_id="fields", deck_label="Fields", deck_icon="workflow", default_name="Task Board", default_size=(360, 235), default_status="available", statuses=frozenset({"available"}),
-            state=ScopedStateSpec(supportedScopes=("shared", "session"), defaultScope="session"),
-            config_model=BoardConfig, traits=frozenset({"oaw.task-board", "ui.task-board.v1", "ui.content-surface.v1"}),
-            surfaces={"preview":True,"inspector":True,"workspace":True}, templateable=True,
-            document=NodeDocumentDefinition(model=Board, actions=documents, summarize=summarize, capture=capture, remap_references=remap_references),
-            execution=NodeExecutionDefinition(items=work_items, apply_outcome=apply_outcome, policy=execution_policy,
-                executor_relationship=f"{PREFIX}.executor", control_capability_kind=f"{PREFIX}.execute"),
-        ))
-        for access, label, description, allowed in [
-            ("read", "Read tasks", "Read tasks, dependencies and progress.", ("read",)),
-            ("progress", "Update progress", "Read tasks and change status/notes; cannot edit the plan.", ("read", "progress")),
-            ("edit", "Manage tasks", "Read, create, edit and delete tasks, dependencies and progress.", ("read", "progress", "upsert", "remove")),
-        ]:
-            registration.register_relationship(RelationshipDefinition(id=f"{PREFIX}.{access}", label=label, short_label=label.lower(), description=description,
-                source_traits=frozenset({"core.agent"}), target_traits=frozenset({"oaw.task-board"}), templateable=True, capabilities=tuple(grants[a] for a in allowed)))
-        registration.register_pack(PackDefinition(id='oaw.tasks.default', name='Task Board',
-            description='Shared planning and Agent execution.', cards=tuple(registration.nodes)))
-
-def create_plugin():
-    return TaskBoardPlugin()
+def register(registration):
+    actions = {"read": (read, Empty), "upsert": (upsert, Upsert), "progress": (progress, Progress), "remove": (remove, Remove)}
+    grants = {}
+    documents = {}
+    for action, (handler, model) in actions.items():
+        kind = f"{PREFIX}.{action}"
+        documents[action] = NodeDocumentAction(handler, capability_kind=kind, read_only=action == "read")
+        async def invoke(context, capability, arguments, action=action):
+            arguments = dict(arguments)
+            revision = arguments.pop("expected_revision", None)
+            if revision is not None and (type(revision) is not int or revision < 0):
+                raise ResourceValidationError("expected_revision must be a non-negative integer")
+            return await context.node_document_action(capability, action, arguments, revision)
+        registration.register_capability_handler(kind, invoke)
+        schema = model.model_json_schema()
+        if action == "upsert":
+            schema["properties"]["tasks"]["description"] = 'List of task objects: {id: "step_name", title: "Do work", description: "", status: "todo|doing|done|blocked", depends_on: ["other_id"], note: ""}. Only id and title are required for new tasks. Existing tasks are replaced, so preserve all their fields when editing.'
+        if action != "read":
+            schema["properties"]["expected_revision"] = {"type": "integer", "minimum": 0, "description": "Latest board revision returned by read_tasks. Re-read after a conflict."}
+            schema.setdefault("required", []).append("expected_revision")
+        descriptions = {
+            "read": "Read tasks and ready_ids from {target_name!r}. Dependencies must finish before a task starts. Execution requires separate permission; reading or editing never starts Agents.",
+            "upsert": "Create or replace tasks in {target_name!r}; omitted tasks remain. Read first and preserve existing progress when editing. Use depends_on for prerequisite task IDs.",
+            "progress": "Update only task status and note in {target_name!r}. Cannot change titles or dependencies. Mark done only after the task's work is actually finished.",
+            "remove": "Delete a task from {target_name!r}; remove incoming dependencies first.",
+        }
+        grants[action] = CapabilityGrantDefinition(kind=kind, tool_prefix={"read":"read_tasks", "upsert":"write_tasks", "progress":"update_task_progress", "remove":"delete_task"}[action], description=descriptions[action], input_schema=schema)
+    documents["configure_execution"] = NodeDocumentAction(configure)
+    async def control(context, capability, arguments):
+        arguments = {key: value for key, value in arguments.items() if value is not None}
+        action = arguments.pop("action", "read")
+        return await context.node_execution_action(capability, action, arguments)
+    registration.register_capability_handler(f"{PREFIX}.execute", control)
+    execution_grant = CapabilityGrantDefinition(kind=f"{PREFIX}.execute", tool_prefix="control_task_execution",
+        description="Read execution history, start ready work (or retry one item_id), or stop {target_name!r}. Start requires the latest document expected_revision. Work runs as an independent batch; use stop explicitly to cancel it.",
+        input_schema={"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["read", "start", "stop"], "description": "read, start, or stop"},
+            "item_id": {"type": "string", "description": "Optional task ID to run or retry only this task; omit to run ready work."},
+            "expected_revision": {"type": "integer", "description": "Latest board revision; required for start. Omit for read/stop."}}, "required": ["action"]})
+    registration.register_relationship(RelationshipDefinition(id=f"{PREFIX}.executor", label="Execute with", short_label="executor",
+        description="Allow this work source to dispatch tasks to this Agent. Task access is granted separately.",
+        source_traits=frozenset({"oaw.task-board"}), target_traits=frozenset({"core.agent"}), templateable=True))
+    registration.register_relationship(RelationshipDefinition(canvas_requires_confirmation=True, id=f"{PREFIX}.control", label="Control execution", short_label="execution",
+        description="Read tasks and explicitly start or stop work; does not grant plan editing.",
+        source_traits=frozenset({"core.agent"}), target_traits=frozenset({"oaw.task-board"}),
+        capabilities=(grants["read"], execution_grant), templateable=True))
+    registration.register_node_type(NodeTypeDefinition(
+        id=PREFIX, label="Task Board", description="Plan tasks and dependencies; share only the permissions each Agent needs.", icon="workflow", color="#6c827d",
+        deck_id="fields", deck_label="Fields", deck_icon="workflow", default_name="Task Board", default_size=(360, 235), default_status="available", statuses=frozenset({"available"}),
+        state=ScopedStateSpec(supportedScopes=("shared", "session"), defaultScope="session"),
+        config_model=BoardConfig, traits=frozenset({"oaw.task-board", "ui.task-board.v1", "ui.content-surface.v1"}),
+        surfaces={"preview":True,"inspector":True,"workspace":True}, templateable=True,
+        document=NodeDocumentDefinition(model=Board, actions=documents, summarize=summarize, capture=capture, remap_references=remap_references),
+        execution=NodeExecutionDefinition(items=work_items, apply_outcome=apply_outcome, policy=execution_policy,
+            executor_relationship=f"{PREFIX}.executor", control_capability_kind=f"{PREFIX}.execute"),
+    ))
+    for access, label, description, allowed in [
+        ("read", "Read tasks", "Read tasks, dependencies and progress.", ("read",)),
+        ("progress", "Update progress", "Read tasks and change status/notes; cannot edit the plan.", ("read", "progress")),
+        ("edit", "Manage tasks", "Read, create, edit and delete tasks, dependencies and progress.", ("read", "progress", "upsert", "remove")),
+    ]:
+        registration.register_relationship(RelationshipDefinition(id=f"{PREFIX}.{access}", label=label, short_label=label.lower(), description=description,
+            source_traits=frozenset({"core.agent"}), target_traits=frozenset({"oaw.task-board"}), templateable=True, capabilities=tuple(grants[a] for a in allowed)))

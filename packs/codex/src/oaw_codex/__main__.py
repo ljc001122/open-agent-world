@@ -30,7 +30,7 @@ def api(base: str, path: str, payload: dict | None = None):
 def setup(base: str, workspace: Path, model: str):
     catalog = api(base, '/catalog')
     if not any(plugin['id'] == 'openai.codex' for plugin in catalog['plugins']):
-        raise RuntimeError('Backend has not loaded openai.codex. Run scripts/setup.ps1 or scripts/setup.sh, then restart it.')
+        raise RuntimeError('Backend has not loaded openai.codex. Install the Codex .oawpack into this world, then restart it. See packs/codex/README.md.')
     existing = {node['id']: node for node in api(base, '/world')['nodes']}
     nodes = [
         {'id': 'codex-demo-agent', 'type': 'openai.codex.agent', 'name': 'Codex', 'position': {'x': 450, 'y': 350},

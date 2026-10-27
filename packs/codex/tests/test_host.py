@@ -18,7 +18,7 @@ from oaw_codex import __main__ as launcher
 
 
 def make_client(tmp_path, live=False):
-    registry = load_plugin_registry()
+    registry = load_plugin_registry(plugin_directories=(Path(__file__).resolve().parents[1],))
     settings = Settings.for_data_root(tmp_path / 'world')
     services = create_services(settings, plugins=registry)
     command = None if live else [sys.executable, str(Path(__file__).with_name('fake_server.py')), str(tmp_path / 'protocol.jsonl')]

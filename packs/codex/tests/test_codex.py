@@ -4,7 +4,6 @@ import asyncio
 import json
 import sys
 from dataclasses import replace
-from importlib.metadata import entry_points
 from pathlib import Path
 
 import pytest
@@ -51,8 +50,10 @@ async def collect(provider, cfg, prompt='hello', ctx=None):
 
 
 def test_packaged_discovery():
-    assert any(ep.name == 'openai-codex' for ep in entry_points(group='open_agent_world.plugins'))
-    assert load_plugin_registry().has_runtime_provider('openai.codex')
+    from backend.packs.spec import read_source_pack
+    source = Path(__file__).resolve().parents[1]
+    assert read_source_pack(source).entrypoints['openai-codex'] == 'oaw_codex:create_plugin'
+    assert load_plugin_registry(plugin_directories=(source,)).has_runtime_provider('openai.codex')
 
 
 @pytest.mark.asyncio

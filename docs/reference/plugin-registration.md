@@ -63,7 +63,7 @@ with target selectors. Use `"1.11"` for optional selectors (`required=False`),
 shared read-only document capabilities, and execution configuration models.
 Open containers retain
 ordinary child nodes and their external relationships; see
-[Skill Toolboxes](../../plugins/skill_packages/README.md#independent-cards-and-open-spaces).
+[Skill Toolboxes](../skill-toolboxes.md#independent-cards-and-open-spaces).
 
 Registration is staged. The registry validates the complete contribution set and
 publishes it atomically only if registration succeeds. Every node type,

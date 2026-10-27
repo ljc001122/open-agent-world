@@ -19,13 +19,11 @@ Availability depends on your installed build and the Pack's requirements.
 
 | Pack | What you can do |
 | --- | --- |
-| Task Board | Track tasks and dependencies with connected Agents |
-| Skill Toolboxes | Give Agents reusable skills and instructions |
-| Agent Barracks | Prepare Agents with equipment and summon them when needed |
+| Core essentials | Agents, resources and workspaces, plus [Task Board](../task-board.md), [Skill Toolboxes](../skill-toolboxes.md) and [Agent Barracks](../agent-barracks.md) |
 | Structure Viewer | View supported structure files opened in connected cards |
 | MatCreator | Work with a materials research team and task workflow |
 | SQLite | Keep a database card and grant scoped database operations |
-| Codex | Use an alternative Agent runtime, when its requirements are installed |
+| Codex (optional install) | Use a local Codex runtime after installing its Pack and configuring Codex |
 
 ## Install a local Pack
 

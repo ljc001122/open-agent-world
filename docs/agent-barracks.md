@@ -1,5 +1,7 @@
 # Agent Barracks
 
+Included in **Core essentials**. No separate Pack installation is required.
+
 Configured Agents in a Barracks are live summon blueprints. Drag an Agent into
 the Barracks as an ordinary container move. Its private equipment is cloned with
 each instance; authorized templateable external connections stay shared.
@@ -26,8 +28,8 @@ Parent Run cancellation propagates to dependent children. Every invocation
 rechecks graph authorization, including after a bounded wait.
 
 MatCreator adds task-ledger dispatch through the host's existing work-source
-contract. See [MatCreator](../matcreator/README.md#delegating-research).
-The plugin requires Plugin API 1.22. The host owns Run lifecycle, resource
+contract. See [MatCreator](../plugins/matcreator/README.md#delegating-research).
+Core owns Run lifecycle, resource
 restoration, capability checks and durable instance records.
 ## Execution graph
 
@@ -35,4 +37,5 @@ The **Agent graph** card in Core essentials can observe this Barracks or an
 equipped **Summoning** card. Connect graph → source using **Observe execution**.
 The selected conversation scopes its attempts; follow-up turns remain separate
 Run nodes. The connection is read-only and grants no summoning or stop permission.
-See the [public execution-source contract](../../docs/developers/execution-graph.md).
+See the [public execution-source contract](developers/execution-graph.md).
+

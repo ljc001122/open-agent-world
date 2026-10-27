@@ -16,6 +16,24 @@ is unsupported and rejected; there is no compatibility loader or automatic migra
 
 ## Source declaration and schema 3
 
+Core essentials includes Agent Barracks, Summoning, Skill Toolboxes, Skills and
+Task Board. Existing card and relationship IDs are preserved. Saved worlds,
+collections and Legion templates migrate the former utility ownership to Core;
+existing content archives can still require the incorporated utility versions.
+These utilities no longer appear as independently removable Packs.
+
+Published applications pin their complete plugin set. Upgrading an existing
+deployment therefore also requires an operator-reviewed update of its deployment
+manifest, or rebuilding and republishing it. Preserve all remaining version pins,
+permissions and layout. Remove a former Codex pin only after confirming the
+deployment contains no Codex cards. The strict startup version check remains in
+effect; changing source files alone does not upgrade a published application.
+
+Codex is an optional Schema 3 project in `packs/codex`, outside bundled source
+discovery and desktop packaging. Build and install its `.oawpack` using the
+[Codex instructions](../packs/codex/README.md). Publishing that archive to the
+Marketplace is a separate author/operator action.
+
 See the [source manifest reference](reference/pack-manifest.md) for identity, components,
 dependency groups, environments and diagnostics.
 

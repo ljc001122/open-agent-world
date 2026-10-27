@@ -24,7 +24,7 @@ Push-Location $projectRoot
 try {
     $python = Join-Path $projectRoot 'backend/.venv/Scripts/python.exe'
     if (-not (Test-Path -LiteralPath $python)) { throw 'Run scripts/setup.ps1 -SkipBuild first.' }
-    & $python -m oaw_codex demo --repo $projectRoot --workspace $workspace --model $Model
+    & $python (Join-Path $PSScriptRoot 'src/oaw_codex/__main__.py') demo --repo $projectRoot --workspace $workspace --model $Model
     if ($LASTEXITCODE -ne 0) { throw "Codex trial exited with code $LASTEXITCODE" }
 }
 finally { Pop-Location }

@@ -129,4 +129,4 @@ Host integration coverage lives in `backend/tests/test_card_state.py`,
 `frontend/src/state/cardState.test.tsx`, SDK surface tests and
 `frontend/e2e/card-state-lifecycle.spec.ts`. The browser test crosses Conversation,
 Workspace and Task Board, so it belongs to the host suite. Plugin-owned planning
-logic remains in `plugins/task_board`.
+logic remains in `backend/plugins/task_board.py`.

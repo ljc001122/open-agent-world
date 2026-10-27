@@ -90,7 +90,7 @@ source edits rebuild the Pack and reload the page. Restart Vite after adding a
 new project. Installed `.oawpack` frontends load from their immutable version
 without rebuilding the host. React and the public SDK always use host instances.
 
-See [Codex](../../plugins/codex/frontend/index.tsx) for a working SDK-based settings
+See [Codex](../../packs/codex/frontend/index.tsx) for a working SDK-based settings
 view and its package-owned icon.
 
 ### Composable workspace sections

@@ -1,5 +1,7 @@
 # Skill Toolboxes
 
+Included in **Core essentials**. No separate Pack installation is required.
+
 **Tools → Skill Toolbox** creates an empty toolbox. Use **Edit toolbox** to add skills,
 and give each a name, a description of when to use it, and Markdown instructions.
 Import SKILL.md copies its complete text into the instruction editor. **Default
@@ -106,7 +108,7 @@ Toolbox capture stores metadata while the normal node/edge capture stores childr
 Legion and Toolbox share the open container frame, drag membership, resizing,
 dissolution and deletion. A toolbox can live inside a Legion. Dragging a skill out
 of that toolbox but into the surrounding Legion keeps it as a direct Legion member.
-See the [container base contract](../../docs/plugins.md#open-containers-plugin-api-15)
+See the [container base contract](plugins.md#open-containers-plugin-api-15)
 for custom container definitions and default UI.
 The bundled Skill type is `oaw.skills.skill`; curated plugins own their corresponding
 `<toolbox-type>.skill` types and exact-target reading relationships.
@@ -136,7 +138,7 @@ uv add --project backend --editable ./path/to/oaw-toolbox-example-review
 Restart the application after installation. Its curated card appears under Tools,
 and uses the same editor as an empty toolbox. The published plugin owns its node
 type, relationship and capability. It requires host Plugin API 1.10; it does not
-depend on the bundled toolbox plugin being installed, inject frontend code, or
+require a separate toolbox Pack, inject frontend code, or
 introduce a separate plugin loader.
 
 Package IDs identify releases. Keep the ID when updating the same package; change
@@ -206,3 +208,4 @@ Real isolation tests are explicit opt-ins. Set `OAW_TEST_SANDBOX_RUNTIME` to
 `backend/tests/test_skill_runtime.py -k real_skill`. These exercise the ordinary
 capability provider and native backend, including workspace output, write refusal
 and refusal to reuse cached paths after access is revoked.
+

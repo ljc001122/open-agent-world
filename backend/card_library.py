@@ -150,6 +150,19 @@ class CardLibraryStore:
         with self.database.transaction(immediate=True) as db:
             old = self._read(db)
             state = old.model_copy(deep=True) if old else LibraryState(migration_pending=self.database.preexisting_world)
+            from backend.migrations.core_essentials import CORE_PACK, CONTRIBUTIONS, RETIRED_PACKS, migrated_owner
+            for card in state.card_definitions.values():
+                card.plugin_id = migrated_owner("node_type", card.id, card.plugin_id)
+            for entry in state.collection.values():
+                owner = migrated_owner("node_type", entry.card_id, entry.plugin_id)
+                if owner != entry.plugin_id:
+                    entry.plugin_id = owner
+                    entry.source_pack_ids = list(dict.fromkeys(
+                        CORE_PACK if pid in RETIRED_PACKS else pid for pid in entry.source_pack_ids))
+            for pid in RETIRED_PACKS:
+                state.packs.pop(pid, None)
+            for owner in CONTRIBUTIONS:
+                state.plugins.pop(owner, None)
             # Preserve the user's collected card and deck placement as a role card.
             state.card_definitions.pop('core.minister', None)
             legacy_minister = state.collection.pop('core.minister', None)
@@ -185,6 +198,9 @@ class CardLibraryStore:
                 if saved and saved.plugin_id != card.plugin_id:
                     raise ConflictError(f"Card {card.id!r} changed plugin ownership")
                 state.card_definitions[card.id] = card
+            core_pack = state.packs.get(CORE_PACK)
+            if core_pack and core_pack.opened:
+                self._unlock(state, core_pack)
             if old is None and state.migration_pending:
                 for pack in state.packs.values():
                     self._unlock(state, pack)

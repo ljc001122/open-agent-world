@@ -34,7 +34,8 @@ def edit(store, action, **kwargs):
     return store.edit(LibraryEdit(expected_revision=store.read().revision, action=action, **kwargs))
 
 
-def test_bundled_packaging_presets_are_published(client):
+def test_bundled_and_explicit_codex_packaging_presets_are_published(codex_client):
+    client = codex_client
     packs = client.get('/api/card-library').json()['packs']
     assert packs['open-agent-world.core.default']['definition']['packaging'] == 'collector'
     assert packs['openai.codex.default']['definition']['packaging'] == 'premium'

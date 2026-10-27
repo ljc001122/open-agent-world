@@ -1,6 +1,6 @@
 # Codex runtime for Open Agent World
 
-An installable OAW plugin with a distinct **Codex Agent** card
+An optional Marketplace-format OAW Pack with a distinct **Codex Agent** card
 (`openai.codex.agent`) and the `openai.codex` runtime. The card appears in the
 Agents library and has its own settings schema. It prefers the desktop App's
 native Codex installation, creates a new OAW session using local Codex login and
@@ -10,8 +10,34 @@ Its settings view lives in `frontend/index.tsx` and uses the public
 `@oaw/plugin-api` SDK. Its OpenAI icon is packaged in
 `src/oaw_codex/assets/openai.svg` (from the official
 [OpenAI brand assets](https://cdn.openai.com/brand/OpenAI-Logos-2025.zip)). The host
-loads both through generic extension/resource contracts. Restart Vite after
-adding the plugin, or rebuild the frontend for production.
+loads both through generic extension/resource contracts. Install the `.oawpack`
+and restart OAW; the host frontend does not need rebuilding. The source lives in
+`packs/codex` and is excluded from default setup, discovery and desktop bundles.
+
+## Build and install
+
+From the OAW checkout, using the prepared backend and frontend dependencies:
+
+```powershell
+uv build --wheel --out-dir .outputs/codex-marketplace/wheels packs/codex
+node frontend/scripts/source-packs.mjs --frontend-path packs/codex/frontend --prepare --build
+backend/.venv/Scripts/python.exe -m open_agent_world.pack build-project packs/codex `
+  .outputs/codex-marketplace/theafish.codex-0.3.0.oawpack `
+  --backend-wheel .outputs/codex-marketplace/wheels/open_agent_world_plugin_codex-0.3.0-py3-none-any.whl `
+  --frontend-dir packs/codex/frontend/dist
+```
+
+The builder requires a new output path. Use **Library > Install Pack from File**
+to install the archive, then restart OAW. When a version is published, the Store
+uses the same installer. Building locally does not publish a Marketplace listing.
+On Linux/macOS, use `backend/.venv/bin/python` for the Python commands.
+
+The distribution is `theafish.codex`, published under the maintainer's Marketplace
+namespace. The runtime owner remains `openai.codex`; the provided Pack is
+`openai.codex.default`, and the card is `openai.codex.agent`. Installing it restores
+existing Codex cards and templates with those identities. An older editable Python
+installation must be uninstalled before switching to the archive, so its module
+path cannot shadow the installed wheel. Keep the world data directory.
 
 This uses the local Codex harness, including its configured skills and MCP tools;
 it does not call a bare model API. It does not attach to or control the desktop
@@ -29,7 +55,11 @@ From the repository root:
 
 ```powershell
 ./scripts/setup.ps1 -SkipBuild # Once, or after dependency changes.
-./plugins/codex/try.ps1
+# Build the archive above, then explicitly install it into the isolated trial:
+backend/.venv/Scripts/python.exe -m open_agent_world.pack install `
+  .outputs/codex-marketplace/theafish.codex-0.3.0.oawpack `
+  --data-root .open-agent-world/codex-card-demo/world
+./packs/codex/try.ps1
 ```
 
 The trial reuses `backend/.venv` and the shared incremental frontend preparation.
@@ -56,7 +86,7 @@ The default coding workspace is this OAW checkout. Select another directory or
 a model explicitly:
 
 ```powershell
-./plugins/codex/try.ps1 -WorkspacePath D:/Projects/example -Model default
+./packs/codex/try.ps1 -WorkspacePath D:/Projects/example -Model default
 ```
 
 `default` means the configured Codex model, not the OAW ADK model. The demo keeps
@@ -69,7 +99,7 @@ ports, and leaves your regular running OAW instance alone. Ctrl+C stops the tria
 servers; cards and Codex session mappings survive restart. No model task runs
 until you send one. Normal Codex account usage applies.
 
-You can also stop it from another terminal with `./plugins/codex/try.ps1 -Stop`.
+You can also stop it from another terminal with `./packs/codex/try.ps1 -Stop`.
 
 Automatic discovery prefers the running Windows desktop App's native runtime,
 then installed desktop runtimes, then PATH. Advanced settings let you choose the
@@ -81,7 +111,7 @@ To configure the CLI source through the environment:
 
 ```powershell
 $env:OAW_CODEX_COMMAND = 'C:/path/to/codex.exe'
-./plugins/codex/try.ps1
+./packs/codex/try.ps1
 ```
 
 The VS Code Codex extension includes a native binary under its installation's
@@ -90,8 +120,7 @@ the plugin launches the executable directly without a shell.
 
 ## Install into your regular world
 
-The regular backend automatically loads this package from `plugins/codex`.
-Restart OAW normally after adding the plugin:
+Install the archive through the Library, then restart OAW normally:
 
 ```powershell
 ./scripts/dev.ps1
@@ -103,7 +132,7 @@ To optionally create the three demo cards in this world, use the **backend API U
 printed by that script** in another terminal:
 
 ```powershell
-uv run --project backend --with-editable ./plugins/codex python -m oaw_codex setup `
+backend/.venv/Scripts/python.exe packs/codex/src/oaw_codex/__main__.py setup `
   --api http://127.0.0.1:8000 --workspace D:/AI/open-agent-world
 ```
 
@@ -165,8 +194,8 @@ Before uninstalling, remove or reconfigure Agents and templates that reference
 ## Verification
 
 ```powershell
-uv run --project backend --with-editable ./plugins/codex python -m pytest `
-  plugins/codex/tests -p no:cacheprovider --basetemp=.outputs/codex-tests
+backend/.venv/Scripts/python.exe .github/run-backend-tests.py `
+  packs/codex/tests -p no:cacheprovider --basetemp=.outputs/codex-tests
 ```
 
 Subprocess fixtures cover stream translation, persisted resume, context separation,
@@ -178,8 +207,8 @@ OAW text card:
 
 ```powershell
 $env:OAW_CODEX_LIVE = '1'
-uv run --project backend --with-editable ./plugins/codex python -m pytest `
-  plugins/codex/tests/test_host.py -k live --basetemp=.outputs/codex-live
+backend/.venv/Scripts/python.exe .github/run-backend-tests.py `
+  packs/codex/tests/test_host.py -k live --basetemp=.outputs/codex-live
 Remove-Item Env:OAW_CODEX_LIVE
 ```
 

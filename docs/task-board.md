@@ -1,10 +1,10 @@
-# Task Board plugin
+# Task Board
 
-A shared work board for human and Agent task planning. This checkout bundles the
-plugin in **Fields > Task Board**; it can also be built and installed as the
-independent `oaw-task-board` Python distribution. An installed entry-point version
-takes precedence over the bundled source. Version 0.2.1 requires host Plugin API 1.18
-and shares the host's `open_agent_world.task_graph` validation with research boards.
+Included in **Core essentials**. No separate Pack installation is required.
+
+A shared work board for human and Agent task planning, available in
+**Fields > Task Board**. It shares `open_agent_world.task_graph` validation
+with research boards.
 
 ## Use
 
@@ -72,7 +72,7 @@ the batch. Stop it through the board or the execution tool.
 
 ## Persistence and reuse
 
-Task data lives in the host's [scoped state store](../../docs/card-state.md),
+Task data lives in the host's [scoped state store](card-state.md),
 independently of card config. The same card follows the active conversation:
 a new session starts empty; switching back restores the original plan. The plugin
 declares a session default and has no session-management code or persistence UI.
@@ -88,21 +88,21 @@ history are not part of the preset. Task IDs are local to their board. Canvas
 undo restores the document including result notes, but not host execution history.
 
 Without execution configuration, the board remains a manual/shared todo list.
-It uses the host's generic [work-source contract](../../docs/execution.md); external
+It uses the host's generic [work-source contract](execution.md); external
 job monitoring and richer acceptance policies can be supplied by other plugins.
 
 ## Development
 
 ```powershell
-./scripts/dev.ps1 -AgentRuntime mock -PluginPath ./plugins/task_board
-uv build ./plugins/task_board --wheel
+./scripts/dev.ps1 -AgentRuntime mock
 ```
 
-The plugin imports only `open_agent_world.plugin_api` and Pydantic. It contributes
+`backend/plugins/task_board.py` registers with Core essentials. It contributes
 one document-backed node, five relationships, and five scoped capability handlers.
 The host supplies the reviewed `ui.task-board.v1` renderer; no arbitrary plugin
-browser code is executed. DAG validation and mutation policies live in this package.
+browser code is executed. DAG validation and mutation policies use the existing public contracts.
 
 Host integration tests: `backend/tests/test_task_board.py`, `backend/tests/test_card_state.py`.
 Execution and non-DAG contract tests: `backend/tests/test_node_execution.py`.
 Browser workflow: `frontend/e2e/task-board.spec.ts`, `frontend/e2e/card-state-lifecycle.spec.ts`.
+
