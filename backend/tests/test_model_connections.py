@@ -9,8 +9,8 @@ import pytest
 from backend.agents import GoogleAdkAgentRuntime
 from backend.errors import ResourceValidationError
 from backend.persistence.database import Database
-from backend.security.llm_settings import LlmSettingsStore
-from backend.security.model_connections import CatalogEdit, ModelConnectionStore
+from backend.security.llm_settings import LlmSettingsStore, SecretStorageError
+from backend.security.model_connections import CatalogEdit, ConnectionEdit, ModelConnectionStore
 
 
 def connection(cid="work", **changes):
@@ -33,6 +33,45 @@ def test_catalog_api_encrypts_keeps_and_clears_keys(client):
     cleared = client.put("/api/settings/models", json=kept).json()
     assert not cleared["connections"][0]["api_key_configured"]
     assert cleared["connections"][1]["api_key_configured"]
+
+
+@pytest.mark.parametrize("reader", ["runtime", "discovery", "legacy"])
+def test_missing_credential_key_reports_recovery_without_replacing_it(tmp_path, reader):
+    db = Database(tmp_path / "state.db")
+    try:
+        secrets = LlmSettingsStore(db, tmp_path)
+        store = ModelConnectionStore(secrets)
+        item = connection("legacy")
+        item["adapter"] = "legacy"
+        saved = store.save(CatalogEdit(connections=[item], default_model="oaw:model:legacy"))
+        secrets.key_path.unlink()
+        with pytest.raises(SecretStorageError, match="re-enter the API key in Settings / Models") as error:
+            if reader == "runtime":
+                store.resolve_runtime("oaw:default")
+            elif reader == "discovery":
+                store.discovery_key(ConnectionEdit(**saved.connections[0].model_dump()))
+            else:
+                store.legacy_options()
+        assert str(tmp_path) not in str(error.value)
+        assert not secrets.key_path.exists()
+        assert store.read() == saved
+    finally:
+        db.close()
+
+
+def test_reentering_model_api_key_recovers_after_key_file_loss(client):
+    saved = client.put("/api/settings/models", json=dict(
+        revision=0, connections=[connection()], default_model="oaw:model:work",
+    )).json()
+    secrets = client.app.state.services.llm_settings
+    secrets.key_path.unlink()
+    # Settings must remain readable so the user can explicitly replace the key.
+    assert client.get("/api/settings/models").json() == saved
+    saved["connections"][0]["api_key"] = "replacement-secret"
+    response = client.put("/api/settings/models", json=saved)
+    assert response.status_code == 200, response.text
+    assert "replacement-secret" not in response.text
+    assert ModelConnectionStore(secrets).resolve_runtime("oaw:default").api_key == "replacement-secret"
 
 
 def test_runtime_connection_carries_the_explicit_image_capability(client):
@@ -339,3 +378,39 @@ def test_agent_defaults_follow_saved_model(client):
         runtime._adk_model("oaw:default")
     store.save(CatalogEdit(revision=0, connections=[connection()], default_model="oaw:model:work"))
     assert runtime._adk_model("oaw:default").model == "openai/same-model"
+
+
+def test_resource_handlers_resolve_models_only_for_the_node_that_still_owns_the_call(tmp_path):
+    """``resource_model_resolver`` is the plugin-facing twin of the secret resolver:
+    it hands a trusted handler the connection for a model reference (``oaw:default``
+    included) and refuses once the node it was created for has been replaced."""
+    from types import SimpleNamespace
+
+    from backend.security.resource_credentials import resource_model_resolver
+
+    db = Database(tmp_path / "models.db")
+    try:
+        store = ModelConnectionStore(LlmSettingsStore(db, tmp_path))
+        store.save(CatalogEdit.model_validate(dict(revision=0, connections=[connection()], default_model=None)))
+        cards = {"node-1": SimpleNamespace(id="node-1", created_at="2026-01-01T00:00:00Z")}
+        services = SimpleNamespace(llm_settings=store.secrets,
+                                   world=SimpleNamespace(get_card=lambda node_id: cards[node_id]))
+        resolve = resource_model_resolver(services, cards["node-1"])
+
+        explicit = resolve("oaw:model:work")
+        assert (explicit.adapter, explicit.model_id, explicit.base_url, explicit.api_key) == \
+            ("openai", "same-model", "https://work.example/v1", "secret-work")
+        # No default model chosen yet: the host's own validation error comes through.
+        with pytest.raises(ResourceValidationError):
+            resolve("oaw:default")
+        draft = store.read().model_dump()
+        draft["default_model"] = "oaw:model:work"
+        store.save(CatalogEdit.model_validate(draft))
+        assert resolve("").model_id == "same-model"  # blank means the default
+
+        # A replacement node must not inherit the connection through an older resolver.
+        cards["node-1"] = SimpleNamespace(id="node-1", created_at="2026-02-01T00:00:00Z")
+        with pytest.raises(ValueError):
+            resolve("oaw:model:work")
+    finally:
+        db.close()

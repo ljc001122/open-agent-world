@@ -88,7 +88,7 @@ equipped Sandboxes, workspaces and runtime caches.
 
 ## Independent cards and open spaces
 
-**Tools ? Skill** creates a standalone card. Drag its header into a toolbox to
+**Tools → Skill** creates a standalone card. Drag its header into a toolbox to
 join, and drag it out to detach. Skills inside remain ordinary editable nodes
 with their own external connections. Moving a toolbox moves its members.
 
@@ -123,6 +123,7 @@ metadata for binary files). Existing plugins with inline text files still work.
 Extract it and use the existing plugin installation flow:
 
 ```powershell
+./scripts/setup.ps1 -SkipBuild -PluginPath ./path/to/oaw-toolbox-example-review
 ./scripts/dev.ps1 -AgentRuntime mock -PluginPath ./path/to/oaw-toolbox-example-review
 ```
 

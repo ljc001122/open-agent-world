@@ -5,6 +5,7 @@ tests are about what the HTTP layer adds on top of the pipeline rather than abou
 the pipeline, which ``test_pipeline.py`` already covers end to end.
 """
 import base64
+import json
 
 import pytest
 
@@ -78,10 +79,28 @@ def test_health_is_open_but_everything_else_needs_the_token(store):
 
 
 def test_the_manifest_lists_the_agent_operations_only(client):
-    names = {tool["name"] for tool in client.get("/v1/tools").json()["tools"]}
+    tools = {tool["name"]: tool for tool in client.get("/v1/tools").json()["tools"]}
+    names = set(tools)
     assert "knowledge_overview" in names
-    # Uploading, configuring and reviewing stay human acts on every transport.
+    assert {"knowledge_process", "knowledge_schema_manage", "knowledge_draft_open",
+            "knowledge_experiment_bundle_prepare", "knowledge_graph_index_build"} <= names
+    assert tools["knowledge_schemas"]["input_schema"]["properties"]["operation"]["enum"] == ["list", "get"]
+    # Raw-byte upload, configuring and reviewing stay human acts on every transport.
     assert not {name for name in names if name.endswith(("_ingest", "_settings", "_review"))}
+
+
+def test_mcp_enforces_the_read_contract_even_without_an_actor_label(store):
+    from oaw_knowledge_base.service import mcp
+
+    create = {"operation": "create", "name": "Sample", "definition": SCHEMA, "system_prompt": "Read samples."}
+    with pytest.raises(ValueError):
+        mcp.call(store, "knowledge_schemas", create, actor=None)
+    created = json.loads(mcp.call(store, "knowledge_schema_manage", create))["schema"]
+    assert json.loads(mcp.call(store, "knowledge_schemas", {"operation": "get", "schema_id": created["id"]}))["schema"] == created
+    with pytest.raises(ValueError):
+        mcp.call(store, "knowledge_graph_index", {"operation": "build"}, actor=None)
+    with pytest.raises(ValueError):
+        mcp.call(store, "knowledge_process", {})
 
 
 def test_an_unknown_operation_is_a_404_not_a_crash(client):
@@ -102,8 +121,8 @@ def test_mkb_refusals_keep_their_own_status_and_message(client):
     assert clash.status_code == 409  # a conflict, not a 500 with a stack trace
     assert "Process graph" in clash.json()["detail"]
 
-    missing = call(client, "projections",
-                   projection_id="00000000-0000-0000-0000-000000000000")
+    missing = call(client, "schemas", operation="get",
+                   schema_id="00000000-0000-0000-0000-000000000000")
     assert missing.status_code == 404
 
 
@@ -121,49 +140,45 @@ def test_the_loop_runs_over_http_and_only_an_admin_publishes(client, admin, stor
     listing = call(client, "sources").json()["sources"]
     assert listing[0]["markdown"]["engine"] == "text"
 
-    schema = call(client, "schemas", operation="create", name="Process graph",
-                  definition=SCHEMA, system_prompt="Extract entities.").json()["schema"]
-    prompt = call(client, "projection_prompt", schema_id=schema["id"],
-                  source_id=source_id).json()
+    draft = call(client, "knowledge_draft_manage", operation="open",
+                 source_ids=[source_id]).json()["draft"]
+    prompt = call(client, "knowledge_extract_prompt", source_id=source_id,
+                  draft_id=draft["id"]).json()
     assert "Sintering" in prompt["markdown"]
-
-    saved = call(client, "save_projection", schema_id=schema["id"],
-                 record_id=prompt["record_id"], model="test-model",
-                 data={"entities": [{"type": "material", "name": "Si3N4"}],
-                       "relations": []}).json()["projection"]
-    built = call(client, "draft", operation="create",
-                 projection_ids=[saved["id"]]).json()["draft"]
-    assert call(client, "review", operation="submit", draft_id=built["id"],
-                expected_revision=1).status_code == 200
+    saved = call(client, "knowledge_save", draft_id=draft["id"], source_id=source_id,
+                 entities=[{"type": "entity", "name": "Si3N4"}]).json()
+    assert saved["added"] == {"entities": 1, "relations": 0}
 
     # The service token reaches everything except the publish.
-    refused = call(client, "review", operation="approve", draft_id=built["id"],
-                   expected_revision=1)
+    refused = call(client, "knowledge_review", operation="publish", draft_id=draft["id"])
     assert refused.status_code == 403
     assert "admin token" in refused.json()["detail"]
     assert call(client, "graph").json()["entities"] == []
 
     # Even the admin has to confirm: the first call is a deliberate speed bump.
-    pending = call(admin, "review", operation="approve", draft_id=built["id"],
-                   expected_revision=1)
+    pending = call(admin, "knowledge_review", operation="publish", draft_id=draft["id"])
     assert pending.status_code == 409
     assert pending.json()["status"] == "confirmation_required"
     assert call(client, "graph").json()["entities"] == []
 
-    published = admin.post("/v1/collections/default/review?confirm=true",
-                           json={"operation": "approve", "draft_id": built["id"],
-                                 "expected_revision": 1})
+    published = admin.post("/v1/collections/default/knowledge_review?confirm=true",
+                           json={"operation": "publish", "draft_id": draft["id"]})
     assert published.status_code == 200, published.text
-    assert published.json()["decision"] == "APPROVED"
+    assert published.json()["draft"]["status"] == "published"
     assert [item["name"] for item in call(client, "graph").json()["entities"]] == ["Si3N4"]
 
 
 def test_confirm_is_ignored_without_the_admin_token(client, store):
-    # ``?confirm=true`` must not become a way around the approval gate.
-    response = client.post("/v1/collections/default/review?confirm=true",
-                           json={"operation": "approve",
-                                 "draft_id": "00000000-0000-0000-0000-000000000000",
-                                 "expected_revision": 1})
+    # ``?confirm=true`` must not become a way around the publish gate.
+    response = client.post("/v1/collections/default/knowledge_review?confirm=true",
+                           json={"operation": "publish",
+                                 "draft_id": "00000000-0000-0000-0000-000000000000"})
+    assert response.status_code == 403
+
+
+def test_rewriting_the_published_graph_needs_the_admin_token_too(client, store):
+    response = client.post("/v1/collections/default/knowledge_graph_audit_apply?confirm=true",
+                           json={"operations": [{"op": "flag", "message": "x"}]})
     assert response.status_code == 403
 
 
@@ -182,3 +197,51 @@ def test_collections_stay_separate_in_one_store(client, store):
     assert [item["filename"] for item in
             call(client, "sources", collection="other").json()["sources"]] == ["b.md"]
     assert names(client) >= {"default", "other"}
+
+
+def test_insights_publish_over_http_only_with_the_admin_token(client, admin, store):
+    tools = {tool["name"] for tool in client.get("/v1/tools").json()["tools"]}
+    assert {"knowledge_insights", "knowledge_insight_prompt", "knowledge_insight_save",
+            "knowledge_insight_update"} <= tools
+    assert "knowledge_insight_review" not in tools
+
+    schema = call(client, "schemas", operation="create", name="Batch", kind="experiment",
+                  definition={"type": "object", "properties": {"m": {"type": "number"}}},
+                  system_prompt="x").json()["schema"]
+    bundle = call(client, "experiment_bundle_manage", operation="create",
+                  schema_id=schema["id"], name="July").json()["bundle"]
+    uploaded = call(client, "experiment_ingest", bundle_id=bundle["id"], filename="log.md",
+                    content_base64=base64.b64encode(b"log").decode(), media_type="text/markdown")
+    assert uploaded.status_code == 200, uploaded.text
+    job = store.open().jobs.wait(uploaded.json()["job"]["id"], timeout=60)
+    assert job.status == "COMPLETED", job.error
+    records = call(client, "experiment_save", bundle_id=bundle["id"],
+                   records=[{"name": "B1", "data": {"m": 1}}]).json()["records"]
+    published = client.post("/v1/collections/default/experiment_review?confirm=true",
+                            json={"operation": "publish", "record_id": records[0]["id"]})
+    # ``confirm`` only counts with the admin token: a plain token gets the speed bump.
+    assert published.status_code == 409
+    published = admin.post("/v1/collections/default/experiment_review?confirm=true",
+                           json={"operation": "publish", "record_id": records[0]["id"]})
+    assert published.status_code == 200, published.text
+
+    prompt = call(client, "insight_prompt", schema_id=schema["id"])
+    assert prompt.status_code == 200 and prompt.json()["record_count"] == 1
+    saved = call(client, "insight_save", schema_id=schema["id"], insights=[
+        {"kind": "note", "title": "one", "statement": "s", "evidence": [{"record_id": records[0]["id"]}]}])
+    assert saved.status_code == 200, saved.text
+    insight_id = saved.json()["insights"][0]["id"]
+
+    refused = call(client, "insight_review", operation="publish", insight_id=insight_id)
+    assert refused.status_code == 403 and "admin token" in refused.json()["detail"]
+    pending = call(admin, "insight_review", operation="publish", insight_id=insight_id)
+    assert pending.status_code == 409 and pending.json()["status"] == "confirmation_required"
+    done = admin.post("/v1/collections/default/insight_review?confirm=true",
+                      json={"operation": "publish", "insight_id": insight_id})
+    assert done.status_code == 200, done.text
+    assert done.json()["insights"][0]["status"] == "published"
+    layer = call(client, "graph", layer="experiment").json()
+    assert {e["type"] for e in layer["entities"]} == {"note", "experiment_record"}
+    # Unpublishing and deleting are not graph writes; a plain token may.
+    assert call(client, "insight_review", operation="unpublish", insight_id=insight_id).status_code == 200
+    assert call(client, "graph", layer="experiment").json()["entities"] == []

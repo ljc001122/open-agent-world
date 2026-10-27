@@ -2,373 +2,63 @@
 
 OAW's user model is **Pack → Card Library → Deck → World**. Local `.oawpack` files
 and Store downloads use the same installer, dependency checks, immutable version
-storage and restart boundary. Code Packs include their backend and
+storage and activation boundary. Code Packs include their backend and
 frontend; [content Packs](creator-packs.md) carry portable Legion templates and
 reference their required Packs without bundling executable plugins.
 
 `PluginRegistry`, `PluginDescriptor`, `FrontendPlugin` and runtime owner are
 internal implementation concepts. Installed and bundled Packs use the existing
 registry, collection, enable/disable controls, lifecycle checks and deck storage.
-Bundled plugins may own several Packs. Schema 1 external distributions own one
-Pack with the same ID as their runtime owner. Schema 3 explicitly records the
-distribution, owner and provided Pack IDs so existing persisted identities can
-be preserved.
+Schema 3 is the canonical code-capable authoring and distribution format. It
+records the distribution, runtime owner and provided Pack IDs independently.
+Schema 2 is supported for code-free content creation. Schema 1
+is unsupported and rejected; there is no compatibility loader or automatic migration.
 
 ## Source declaration and schema 3
 
-New source projects declare installation intent in `oaw.pack.toml`. The source
-reader does not import the Pack or run setup hooks. Python dependencies remain
-in native `pyproject.toml`/requirements files and frontend dependencies remain
-in the Pack's own `frontend/package.json` and lockfile.
+See the [source manifest reference](reference/pack-manifest.md) for identity, components,
+dependency groups, environments and diagnostics.
 
-The development launch scripts prepare source dependencies in the same `--profile`
-that the backend will use, before starting the server. For manual preparation,
-run `scripts/install-plugins.py --profile my-dev plugins/my_pack` with the backend
-interpreter. Without `--profile`, preparation uses `OPEN_AGENT_WORLD_DATA_ROOT` or
-the standard application data root. Uninstalled source Packs stay uninstalled
-until explicitly restored; restarting development does not prepare them again.
+## Archive and Python contract
 
-```toml
-schema_version = 3
+A `.oawpack` is a ZIP with `manifest.json`, `checksums.json`, optional assets and
+README, and either code-free Schema 2 content or Schema 3 backend/frontend
+artifacts. Generate the contract with `python -m open_agent_world.pack schema`.
+Inspection reads metadata without importing Python or evaluating frontend code.
 
-[distribution]
-id = "example.research"
-name = "Research"
-# Version defaults to project.version in pyproject.toml.
-
-[compatibility]
-plugin_api = "1.35"
-oaw = ">=0.1.0,<1"
-
-[plugin]
-owner = "example.research"
-packs = ["example.research.default"]
-node_types = ["example.research.analysis"]
-
-[components.backend]
-project = "pyproject.toml"
-mode = "host-adapter"
-
-[components.frontend]
-project = "frontend/package.json"
-entry = "frontend/index.tsx"
-mode = "pack-build"
-
-[dependency-groups.compute]
-sources = [{ path = "requirements/compute.txt", kind = "requirements" }]
-
-[environments.engine]
-target = "host-worker"
-provider = "python"
-include = ["compute"]
-prepare = "install"
-verify_imports = ["numpy"]
-
-[environments.analysis]
-target = "sandbox"
-provider = "python"
-include = ["compute"]
-python = ["ase>=3.22"]
-prepare = "on-use"
-
-[features.research]
-environments = ["engine", "analysis"]
-```
-
-`plugin.node_types` declares the exact card types owned by the Pack. Source and
-archive registration check this list before publishing contributions, so existing
-card IDs can survive a distribution rename. Core card types cannot be claimed;
-they may be included in a Pack collection without changing their ownership.
-Omitting this list retains the owner namespace rule for archive card types.
-
-Put `numpy` and its version constraint once in `requirements/compute.txt`. Both
-environments consume that declaration; `ase` is a Sandbox-only addition. Source
-references can also select a project's runtime dependencies (`kind="project"`),
-an optional extra (`kind="optional", group="analysis"`) or a Python dependency
-group (`kind="group", group="analysis"`). Named groups use `include` to compose
-other groups. Cycles and missing references are rejected, and diagnostics retain
-the origin of each requirement.
-
-Sandbox does **not** inherit OAW's host packages, all installed Packs, development
-dependencies, or the developer's current environment. Reusing a declaration does
-not copy installed packages: each execution target prepares its own environment.
-For example, a Sandbox-only CLI can be recorded in a separate `provider="node"`
-environment with `node=["package-name@version"]`. Declaring it does not imply
-that a provider supports installing it. Unsupported providers and lockfile
-installation formats are reported explicitly. Host worker providers prepare Python
-environments and verified executable artifacts. Arbitrary host npm or system-package
-installation commands are outside the declaration contract.
-
-Host adapters execute in OAW's Python process through its public Plugin API.
-Their dependencies use an explicitly shared, version-compatible library layer:
-mandatory host packages are reused, and additional libraries ship as hash-locked
-wheels under `backend/dependencies/`. Installation verifies and extracts those
-wheels into `<data_root>/packs/adapter-wheels/<sha256>`, without modifying host
-site-packages. Conflicting versions, hashes and module ownership fail before
-activation. On a host that already enables OAW's declared `hosting`, `adk`, or
-`litellm` extras, their exact-version dependency closure is explicitly classified
-as **Provided by OAW**. Its installed file ownership, module origins, versions,
-and direct-source provenance are checked; OAW retains responsibility for those
-host files. The Pack still ships its locked wheels as a fallback for clean hosts.
-This exception does not apply to unrelated packages in `site-packages`, which
-must match the locked wheel bytes. Host-provided libraries survive Pack uninstall.
-This shared namespace is not process isolation; incompatible engines
-belong in a separate host worker. AtomSculptor and Card Factory use public SDK
-facets. Frontend libraries are bundled by the author; end users do not run npm. All repository
-Packs with a frontend now own a package manifest, lockfile and independent build.
-They import host contracts through `@oaw/plugin-api`. XRD obtains the Structure
-Viewer's renderer through a named frontend service, without importing its source
-or bundling its scientific viewer dependencies a second time.
-
-Run `npm run dev` or `npm run build` in `frontend/`. Both prepare each source
-Pack's locked dependencies and execute its own `npm run build`. Development
-serves the resulting `dist` artifact; production copies the same artifact into
-the host assets. Source edits rebuild the affected Pack and reload the page.
-Adding a new source Pack requires restarting Vite. An existing checkout may
-reuse exact installed lockfile versions through project-local cache links;
-otherwise preparation runs `npm ci --ignore-scripts` in that Pack. Build scripts
-run explicitly, and dependency lifecycle scripts do not run automatically.
-Root dependencies retain libraries actually used by host UI, including Three
-for Pack artwork; MatterViz, Svelte and PDF.js belong to their Pack projects.
-
-Inspect a source project or the entire source directory without installing:
-
-```sh
-python -m open_agent_world.pack doctor plugins/atomsculptor
-python -m open_agent_world.pack doctor plugins --data-root /path/to/oaw-data
-```
-
-`doctor` reports identities, expanded environments, requirement origins, host
-compatibility and available environment receipts. A declaration alone is not a
-readiness check for a particular Sandbox, model connection or credential.
-
-To use a managed Sandbox environment, bind it to the executable Skill in its
-Skill package. The owner identifies the runtime plugin, not its distribution:
-
-```json
-{
-  "id": "analyse-structure",
-  "runtime_requirements": [
-    { "owner": "example.research", "environment": "analysis" }
-  ]
-}
-```
-
-This field is part of the normal Skill entry alongside its instructions and
-files. When `run_skill_script` executes that Skill, OAW checks the live Pack,
-Skill and Sandbox grants, composes its declared environments, and prepares and
-runs it inside the same authorized Sandbox command. Python packages use a private
-environment without host site packages; npm packages use a private prefix. The
-Sandbox's network policy and command timeout still apply. A failed preparation
-does not run the Skill, and an interrupted attempt can reuse verified receipts.
-
-Runtime providers can also select default profiles on their Pack descriptor:
-
-```python
-PluginDescriptor(
-    id="example.research", version="1.0.0", plugin_api_version="1.35",
-    sandbox_environments=("analysis",),
-)
-```
-
-These names reference the owning Pack's declared Sandbox environments. Ordinary
-commands from that runtime and its Skill scripts prepare those profiles on use;
-Skill-specific requirements compose into the same private environment. The host
-resolves the current invoking Run's provider and rechecks the live Pack and
-Sandbox grants before dispatch. Direct `python`/`python3` commands preserve
-working-directory scripts, `-c`, `-m` and literal arguments. Shell commands inherit
-the private environment's `PATH`; explicit paths inside shell text retain normal
-shell semantics. Direct custom Python interpreter paths/versions and `-S` are
-rejected because they bypass the selected environment. `python_environment=none`
-cannot be combined with runtime-declared profiles. Declarations marked
-`management="legacy-shared"` use the existing `PluginEnvironmentBootstrap` and
-read-only shared Sandbox Python instead of creating a private environment. Skill
-references preserve their authorization and declaration checks on this path.
-AtomSculptor uses shared profiles for base modelling and core Skills, so a new
-Sandbox reuses the host-prepared platform environment. Its optional Materials
-Project and RDKit Skills retain private profiles. When shared defaults compose
-with a private Skill profile, their requirements are included in that private
-environment; they do not inherit installed shared packages.
-
-Durable job providers can declare their own `sandbox_environments=("bohr",)`
-on `BackgroundJobProvider`. The host binds these profiles when the provider calls
-`context.execute`, using the persisted job's provider owner, Agent and Sandbox.
-Submission, later monitoring and cancellation use the same declaration even
-outside the submitting Run. Live job/session permissions and Pack availability
-are rechecked after preparation waits. These provider profiles are independent
-of the Agent runtime's defaults; they do not grant additional Sandbox access or
-change submission deduplication and uncertain-result reconciliation.
-
-Skill binding accepts Python, Node, `sh` or `bash` interpreters without custom
-flags. Sandbox preparation must use
-`prepare="on-use"`. Python dependencies accept index package names and version
-constraints, without URLs or markers; npm accepts registry names with optional
-versions. Node/npm must already exist in the Sandbox. Lockfiles, extra runtime
-resources, verification scripts and external prerequisite orchestration are not
-implemented by this Sandbox provider and are reported as unsupported. Sandbox
-caches remain writable by that Sandbox; they are not a security boundary.
-
-Model credentials, licensed files, GPUs and services belong in `prerequisites`
-and feature references. Executable environments can declare HTTPS or Pack-local
-artifacts with SHA-256, platform, archive format and executable path, or explicitly
-allow an existing verified executable. External executables remain user-owned.
-A declaration alone does not prove a configured service is usable.
-Legacy imported scientific Skills without `runtime_requirements` retain their
-explicit preparation instructions until migrated.
-
-Build the adapter wheel and frontend, resolve adapter libraries in a private
-wheelhouse, then create a schema 3 archive:
-
-```sh
-uv build /path/to/research --wheel --out-dir /path/to/research/dist
-npm --prefix /path/to/research/frontend ci
-npm --prefix /path/to/research/frontend run build
-python -m open_agent_world.pack resolve-adapter /path/to/research /artifacts/research-wheels
-python -m open_agent_world.pack build-project /path/to/research /artifacts/research-1.0.0.oawpack \
-  --backend-wheel /path/to/research/dist/adapter-1.0.0-py3-none-any.whl \
-  --frontend-dir /path/to/research/frontend/dist \
-  --dependency-wheels /artifacts/research-wheels
-```
-
-This packages prebuilt artifacts, compiles the source declaration, checks owned
-module roots and wheel metadata, and includes declared runtime resources. It
-does not run arbitrary build or setup commands. Declare adapter package roots in
-`tool.hatch.build.targets.wheel.packages`; host-private `backend.*` imports must
-be migrated before release. The final archive is checked by the same validator
-used for installation. The older `build` command still packages a prebuilt
-directory containing `manifest.json`. Schema 1 code and schema 2 content Packs
-remain supported; content Packs remain code-free.
-
-`resolve-adapter` is an explicit author/setup operation. It uses isolated build
-tools, pins the current shared host versions, and builds pinned HTTPS Git sources
-into wheels. End-user archive installation performs no Git clone or build hook.
-Standalone console entry points are omitted from the adapter artifact while
-their modules remain available. Packs without custom frontend declarations can
-omit `--frontend-dir`; the builder emits an empty frontend contribution.
-
-Native dependency wheels bind an archive to their Python ABI and platform tags.
-Build and smoke-test on each supported target. The current Store version points
-to one artifact and does not automatically select platform variants; incompatible
-hosts reject that artifact before preparation. A pure-Python adapter wheel does
-not make its native dependencies portable across platforms.
-
-Author builds validate delivered wheel bytes and dependency closure. The
-`inspect` and installation commands additionally check libraries already present
-in the target host. Outside the explicitly classified host-provided closure,
-even a same-version library with different code or resources cannot shadow the
-locked artifact. Validate a release in a clean host
-profile/interpreter; an altered development library can legitimately block local
-installation without changing the published archive.
-
-Source setup uses the same adapter preparation and environment providers. It
-registers the adapter package with `--no-deps`, then records managed dependencies
-under the selected OAW profile. Normal discovery never downloads packages. A
-developer's already installed compatible libraries remain usable, with exact
-provenance checks for pinned direct references.
-
-Host worker preparation reuses a matching application-bundle environment before
-downloading dependencies. It also migrates pre-unification OAW Python workers
-from `oaw-runtimes/<owner>/*` when their v2 receipt, interpreter, complete named
-dependency closure and runtime checks match the current declaration. Migration
-copies the verified environment into the selected profile; the original remains
-untouched. Incompatible or unverifiable legacy environments are not adopted.
-Host site-packages are never inherited by these workers. uv's configured download
-cache is shared with normal setup, while installed libraries remain profile-owned.
-Source setup prints each preparation stage, elapsed time and a periodic heartbeat.
-
-Removal previews show dependent Packs and shared resources. Uninstall changes
-the profile's selection/enrollment; it preserves source files, retained archives,
-world data and collection/deck intent. A shared resource is removed only after
-its last selected/source consumer and active process lease are gone. Loaded
-libraries remain pinned until restart. Sandbox profiles are collected at the
-next admitted profile command. `uninstall-plan` and `gc` are available in the
-local CLI; removal itself uses the running host's world and active-work checks.
-
-## Version 1 code archive
-
-A `.oawpack` is a ZIP with these files at the archive root (no wrapper directory):
-
-```text
-manifest.json
-checksums.json
-backend/oaw_pack_example_greeter-0.1.0-py3-none-any.whl
-frontend/index.js
-assets/                 # optional
-README.md               # optional
-```
-
-```json
-{
-  "schema_version": 1,
-  "id": "example.greeter",
-  "name": "Greeter",
-  "version": "0.1.0",
-  "compatibility": { "oaw": ">=0.1.0,<0.2", "plugin_api": "1.23", "frontend_api": 1 },
-  "dependencies": { "packs": [] },
-  "runtime": { "sandbox": { "python": ["colorama==0.4.6"] } },
-  "entrypoints": {
-    "backend": "backend/oaw_pack_example_greeter-0.1.0-py3-none-any.whl",
-    "frontend": "frontend/index.js"
-  }
-}
-```
-
-The validation model is `backend.packs.manifest.PackManifest`. Generate its JSON
-Schema with `python -m open_agent_world.pack schema`. Metadata inspection does
-not import or execute the backend wheel or frontend module.
-
-- External IDs contain lowercase alphanumeric dot-separated names, for example
-  `publisher.greeter`. IDs and canonical PEP 440 versions are stable identities.
-- OAW uses a PEP 440 version specifier. Plugin API compatibility uses the existing
-  same-major, host-minor-at-least-requested rule. Frontend API must be `1`.
-- A Pack dependency is `{ "id": "oaw.tasks.default", "version": ">=0.1" }`.
-  Bundled Pack versions are their owning runtime versions. Missing, disabled,
-  incompatible and cyclic dependencies are rejected when selecting versions.
-- Unknown fields, including unsupported non-Python runtimes and installation
-  hooks, are rejected. A future schema version can add new runtime kinds.
-- `checksums.json` maps every file except itself to its lowercase SHA-256 digest,
-  including `manifest.json`. The installation database retains these digests;
-  editing both an installed asset and its neighboring checksum file is not enough
-  to change accepted content.
-- Archives are limited to 128 MiB compressed, 256 MiB expanded per ZIP layer and
-  4096 entries per layer. Paths are canonical relative paths on Windows/POSIX.
-  Traversal, symlinks, special files, encrypted entries, duplicate/case-colliding
-  members, ambiguous JSON keys and Windows device/stream paths are rejected.
-
-Checksums detect corruption and unexpected modification. They are **not publisher
-authentication**. Packs run as trusted application code in the host backend and
-browser; this format does not provide OS-level isolation for Pack code.
-
-## Backend contract
-
-Version 1 accepts one pure-Python `py3-none-any` wheel. Its only Python package is
-`oaw_pack_` plus the distribution ID with dots replaced by underscores, e.g.
-`oaw_pack_example_greeter`. The other root is its single `.dist-info` directory.
-It must declare exactly one factory:
+Schema 3's compiled manifest records `owner`, `packs`, `node_types`,
+`backend_modules`, entrypoints and dependency/environment declarations from
+`oaw.pack.toml`. Module roots must be private `oaw_` packages declared by the
+Python project. They need not be derived from the distribution ID. The wheel
+contains exactly one `open_agent_world.plugins` factory named for the runtime
+owner, for example:
 
 ```toml
 [project.entry-points."open_agent_world.plugins"]
 "example.greeter" = "oaw_pack_example_greeter:create_plugin"
 ```
 
-The wheel is imported directly from its immutable version path using Python's
-ZIP importer. It is not pip-installed into OAW's interpreter. Backend dependency
-metadata must be satisfied by the host; private pure-Python helpers can be
-included under the Pack's own module. Native backend wheels, `.pth` hooks and
-backend dependency URLs are unsupported in v1. Use `importlib.resources` for
-wheel resources, rather than treating `__file__` as an extracted directory.
+The installer verifies and materializes these modules before selection. Startup
+uses prepared modules and the existing PluginRegistry; archive ZIP importing is
+not supported. Adapter dependencies follow the shared, locked wheel mechanism
+in the [source manifest reference](reference/pack-manifest.md). Factories use `open_agent_world.plugin_api`, return `PluginDefinition`,
+and register the declared provided Packs and owned card types atomically.
+Descriptor identity, version, API and dependencies must agree with the manifest.
 
-The factory returns the existing plugin interface and imports only the public
-`open_agent_world.plugin_api` contract. Its descriptor ID, version, Plugin API and
-dependency owners must agree with the manifest. Sandbox requirements come from
-the manifest; a nonempty descriptor declaration must agree. Registration must
-declare exactly one `PackDefinition` with the distribution ID, and cards must
-belong to that owner's namespace. Existing registry validation remains atomic.
+Distribution IDs are lowercase dot-separated names (hyphens allowed), and versions
+use canonical PEP 440 spelling. Keep distribution, runtime owner, provided Pack,
+card and relationship identities stable across releases. Missing, disabled,
+incompatible or cyclic Pack dependencies block selection.
 
-Core/bundled packages and configured development paths retain their current
-loader. Installed Pack discovery follows from `<data_root>/packs` at startup,
-with metadata dependency ordering and duplicate ownership checks. Loading a
-broken backend fails closed with the Pack ID/version; no hot reload is attempted.
+`checksums.json` covers every archive file except itself. Existing size, path,
+symlink, duplicate-entry and wheel ownership checks apply to both formats.
+Checksums detect corruption; they do not authenticate publishers. Python and
+frontend code execute as trusted application code, without OS-level isolation.
+
+Core components and configured development sources retain their existing loaders.
+Installed discovery uses the installation manager's selected versions and prepared
+modules. A broken factory fails closed without replacing the working selection.
+
 
 ## Frontend contract and shared React
 
@@ -416,7 +106,9 @@ npm run build:pack-sdk
 npm pack ./pack-sdk --pack-destination ../.outputs
 ```
 
-This is a local developer artifact, not a new public npm release workflow.
+CI also uploads this versioned tarball, identified by commit, for independent
+projects. A public npm release workflow is not yet provided.
+
 
 ## Storage and lifecycle
 
@@ -431,7 +123,15 @@ Application installation files remain separate. Normal application upgrades do
 not replace user data. Storage relocation copies Pack versions and checkpoints
 the installation database along with the existing databases.
 
-**Inspect → plan → prepare required host environments → stage → select → restart → prepare Sandbox when used**
+**Inspect → plan → prepare required host environments → stage → select → activate or restart → prepare Sandbox when used**
+
+New content Packs and verified pure declarative Packs activate in the running
+host immediately. Their catalog and frontend use the existing Library event and
+dynamic module loader. Pure declarative adapter bytes must exactly match the host
+compiler's output; a claimed manifest label cannot make arbitrary Python safe to
+load live. Frontend-only cards use this declaration path. Other code Packs, mixed
+Python contributions, and changes to already loaded owners remain pending restart.
+No background Agent or Sandbox work is interrupted automatically.
 
 The installer verifies all metadata, both archive layers, checksums, ownership,
 Pack dependencies and obvious direct Python conflicts before selection. Files
@@ -536,18 +236,21 @@ Restoring the matching plugin and restarting makes retained objects usable again
 Deleting missing objects currently clears canvas undo history because restoring
 them requires their plugin implementation.
 
-This recovery applies to unavailable persisted types. If an installed backend
-itself throws during import or registration and prevents startup, stop OAW and
-use the host interpreter:
+Import, registration and safely compensated optional startup failures leave the
+owner Unavailable while independent plugins continue. Use the failure phase and
+diagnostic in the Library, repair/select a compatible version and restart. Unsafe
+cleanup or persistence errors can still prevent startup. Offline recovery uses
+the host interpreter:
 
 ```sh
-python -m open_agent_world.pack activate --data-root /path/to/oaw-data example.greeter 0.1.0
+python -m open_agent_world.pack activate --data-root /path/to/oaw-data example.greeter 0.2.0
 ```
 
 The recovery command loads bundled definitions to protect their identities but
 does not import the broken selected external version. Start OAW again afterwards.
 There is no automatic rollback, publisher authentication or version migration
 framework in this release; authors must preserve their persisted-data contracts.
+
 
 ## Legacy shared Sandbox Python
 
@@ -580,36 +283,14 @@ can be retried. Install-time direct checks do not claim to solve transitive or
 platform-specific conflicts offline; those appear as environment failures before
 the shared environment is changed.
 
+
 ## Build and acceptance
 
-The [external Greeter fixture](../examples/packs/greeter/README.md) contains its
-own Python project, npm project, manifest and frontend. Copy it outside the host
-repository, install the SDK tarball and build there. Package prebuilt files with:
-
-```sh
-python -m open_agent_world.pack build /external/greeter/dist /artifacts/greeter-0.1.0.oawpack
-python -m open_agent_world.pack inspect /artifacts/greeter-0.1.0.oawpack
-```
-
-In OAW, open **Pack & Card Library → Packs → Install Pack from File...**. Review
-the name/version and trusted-code notice, install, and restart OAW. Once its
-environment is ready, open the Pack, add Greeter to the active deck, place the
-card and use **Greet**. The saved greeting survives reloading the browser.
-
-For repeatable host acceptance, build the host frontend and SDK tarball first,
-then from the root run `python scripts/build-external-greeter.py`; from `frontend`
-run `npm run test:e2e:packs`. The build helper copies the fixture to an OS temporary
-directory outside the checkout and builds from public dependencies. The runner
-uses a fresh OAW data directory, serves the already-built frontend through the
-production launcher, installs through the UI, stops/restarts the process, waits
-for real Shared Python provisioning, and exercises collection, deck placement,
-view loading and persisted interaction. Results are under `.outputs/pack-acceptance`.
-This is production-host acceptance, not an installer rebuild or all-platform test.
-
-Contract/backend tests live in `backend/tests/test_pack_installation.py`; shared
-environment and frontend failure-isolation tests remain beside their existing
-host suites. The browser acceptance belongs in `frontend/e2e` because it verifies
-cross-cutting host installation, restart, library and deck behavior.
+Follow [Build and install a Greeter Card App](developers/card-app.md) for commands
+that build a wheel and frontend, package them and verify an installed host.
+`doctor` is static inspection; `check --lifecycle` executes trusted plugin code
+in a disposable profile. Neither alone proves browser or native runtime behavior.
+Use the [existing acceptance runners](developers/testing.md) when changing packaging.
 
 ## Store acquisition
 
@@ -618,7 +299,7 @@ explicit Get/Update and installed/restart state. The local backend downloads the
 selected Marketplace version and passes its verified `.oawpack` bytes to this
 same installer. Local **Install Pack from File...** remains available.
 
-See [Pack Store Client V0](pack-store.md) for the HTTP boundary, integrity checks,
+See [Store protocol](pack-store.md) for the HTTP boundary, integrity checks,
 development configuration and offline/private Release acceptance commands.
 
 Accounts, publishing, ratings/moderation, paid Packs, automatic updates,

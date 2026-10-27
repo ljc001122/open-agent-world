@@ -1,24 +1,11 @@
-# Pack Store Client V0
+# Store protocol and installation boundary
 
-Verified implementation and platform boundaries: [acceptance report](internal/validation/pack-store.md).
-
-Open **Pack & Card Library → Store**, search for a Pack, open its details and
-choose **Get**. Installation selects the version for the next OAW startup.
-Restart OAW, open the Pack in **Packs**, collect its cards and add them to a deck.
-Store lists an explicit **Update** action when a newer version is available;
-it does not poll or install updates in the background.
-
-The official Marketplace endpoint has not been deployed. An unconfigured build
-shows **Store unavailable → Retry**, while Packs, Cards, Deck and World continue
-to work. Development and acceptance can set `OPEN_AGENT_WORLD_MARKETPLACE_URL`
-to the Marketplace service origin (without `/v1`). This is a host environment
-override, not an ordinary Settings UI field. The single release-owned default is
-`backend/official_marketplace.py:OFFICIAL_MARKETPLACE_URL`. An explicit override
-wins; an explicit empty override disables Store for development/offline checks.
-All URL validation and networking remain lazy, so startup does not need internet.
-Tagged Desktop releases require a confirmed default. The default stays unset
-until the service is deployed and verified; no guessed address is shipped.
-See [production readiness and remaining operator steps](internal/plans/marketplace-production.md).
+For browsing and installation, see [Packs and cards](user-guide/plugins.md).
+The OAW client uses the official Marketplace origin from
+[official_marketplace.py](../backend/official_marketplace.py). For development,
+`OPEN_AGENT_WORLD_MARKETPLACE_URL` overrides that origin; an explicit empty value
+disables Store. No ordinary Settings field changes it. Startup performs no
+Marketplace network request, and local Packs remain usable when Store is unavailable.
 
 ## Ownership and HTTP
 
@@ -84,84 +71,25 @@ never replaces archive validation. Installation uses the existing world mutation
 transaction; network waiting happens outside it. Once publication begins, the
 existing cancellation-safe thread/transaction cleanup completes it atomically.
 
-No PackSource interface was needed: both sources already converge on the same
-`bytes → install` boundary. There is no second installer, registry or runtime.
-Future Workshop acquisition can supply canonical bytes and expected identity to
-this boundary. No Steam/provider framework has been introduced.
-
-Dependency errors come directly from the installer. V0 does not recursively
+Dependency errors come directly from the installer. The client does not recursively
 download dependencies. Shared Python preparation still happens after restart
 through the existing bootstrap and its retry lifecycle. Download failure does
 not alter selected versions or other local data; retry starts the artifact anew.
 There is no Range/resume or background download manager.
 
+
+## Client limits
+
+The client supports catalog, details and explicit Get/Update. It does not perform
+background updates, recursive dependency acquisition, publisher login or uploads.
+Author submission happens in the [separate browser workflow](creator-packs.md#submit-to-marketplace).
+These client limits do not describe the complete Marketplace website's features.
+
+New passive/content Packs may activate immediately through the installer; Python
+code and already loaded version changes need restart. Selected and loaded versions
+remain distinct. See [distribution](pack-distribution.md#storage-and-lifecycle).
+
 ## Acceptance
 
-Host integration scenarios live in `frontend/e2e/pack-host.spec.ts` because they
-span installation, process restart, Library, Deck, World and frontend runtime.
-The same post-restart Greeter scenario is reused for all sources. Tests preserve
-the existing externally built fixture; normal tests need no private GitHub access.
-
-```powershell
-# Build fixture once if .outputs/pack-acceptance/build.json is missing:
-npm.cmd --prefix frontend run build:pack-sdk
-Push-Location frontend
-npm.cmd pack ./pack-sdk --pack-destination ../.outputs
-Pop-Location
-backend/.venv/Scripts/python.exe scripts/build-external-greeter.py
-
-npm.cmd --prefix frontend run build
-node frontend/scripts/run-pack-e2e.mjs                 # local file
-node frontend/scripts/run-pack-e2e.mjs --store-fake    # fake HTTP + offline
-```
-
-The fake HTTP server implements catalog/search/pagination/detail/version and
-streams the fixture bytes. It is stopped before the offline UI scenario. Real
-Shared Python provisioning may download the fixture's declared `colorama`
-requirement from PyPI; the fake Marketplace itself never accesses GitHub.
-
-The explicitly gated real acceptance can use an already running Marketplace:
-
-```powershell
-$env:OAW_STORE_REAL_ACCEPTANCE = '1'
-$env:OPEN_AGENT_WORLD_MARKETPLACE_URL = 'http://127.0.0.1:8000'
-node frontend/scripts/run-pack-e2e.mjs --store-real
-```
-
-Or launch the existing unmodified Marketplace with a copied seeded database:
-
-```powershell
-$env:OAW_STORE_REAL_ACCEPTANCE = '1'
-backend/.venv/Scripts/python.exe scripts/run-store-private-acceptance.py `
-  --marketplace-repo D:/AI/oaw-marketplace
-```
-
-That helper uses an existing `MARKETPLACE_GITHUB_TOKEN` or authenticated GitHub
-CLI credential, sends it only to the Marketplace subprocess, and removes GitHub
-and Marketplace credential variables from the OAW/browser environment. It does
-not publish, upload, modify the Marketplace source or persist credentials.
-
-The real gate requires the original `example.greeter@0.1.0` artifact, 4,191 bytes:
-
-```text
-34ee377564f6fd7776a041cc8db82d6e9f8e5bd107c4b9287f416122259cffb5
-```
-
-It checks the install database's actual digest after Get and runs the complete
-restart/Library/Deck/World/persisted-interaction scenario. Each fresh profile
-contains screenshots, logs and a success `receipt.json` under
-`.outputs/pack-acceptance/<source>-<timestamp>/`.
-
-To run with the formal packaged interpreter, locked dependencies, bundled code
-and frontend instead of the development interpreter, build the Desktop payload,
-then use `--desktop-payload .open-agent-world/desktop-payload` with the private
-helper, or set `OAW_PACK_DESKTOP_PAYLOAD` for the Node runner. This exercises the
-packaged launch entry with `-I -B`. It is distinct from interacting with Tauri's
-WebView or installing the NSIS executable.
-
-## Deferred
-
-Auth/accounts, namespace ownership, publisher identity, publishing/upload APIs,
-OAuth/token storage, commercial Packs, reviews, ratings, moderation, signatures,
-cloud storage, Steam, automatic updates, automatic dependency installation and
-hot loading remain for later stages. Marketplace V0 is unchanged by this client.
+Use the [existing local and fake-Store acceptance runners](developers/testing.md).
+A fake HTTP result is not live Marketplace, native desktop or publication acceptance.

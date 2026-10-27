@@ -1,6 +1,6 @@
 # Persistent card finishes
 
-Pack opening assigns a single print finish to each newly acquired collection entry. The authoritative probability table is `backend/card_finishes.py::CARD_FINISH_WEIGHTS`: normal 72%, foil 16%, rainbow 6%, starlight 4%, laser 2%. The small `weighted_choice` utility accepts one random sample, supports relative and zero weights, and validates its inputs. Pack generation previously had no seeded random stream.
+Pack opening assigns a single print finish to each newly acquired collection entry. The authoritative probability table is `backend/card_finishes.py::CARD_FINISH_WEIGHTS`: normal 72%, foil 16%, rainbow 6%, starlight 4%, laser 2%. The small `weighted_choice` utility accepts one random sample, supports relative and zero weights, and validates its inputs.
 
 ## Ownership and persistence
 
@@ -50,7 +50,7 @@ Low-level optical descriptors retain six canonical IDs: `normal / foil / holo / 
 - **Aurora:** continuous warped thickness with broad interference colour travel.
 - **Laser / starlight:** extension presets using the same groove and flake parameters; no separate rendering branches. Shared clearcoat can remain visible outside the laser diffraction window.
 
-Storage remains independent: existing `CardFinish` IDs and reward probabilities are unchanged. `materialForFinish('rainbow')` maps to `aurora` to preserve the old flowing-film identity. Holo is a distinct laminate, selectable in the production editor; this change does not add new inventory rewards.
+`CardFinish` inventory IDs and reward probabilities are separate from material selection. `materialForFinish('rainbow')` maps to `aurora`; Holo is a distinct laminate selectable in the production editor.
 
 ### Light, view and optical evaluation
 

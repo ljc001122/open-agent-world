@@ -1,22 +1,30 @@
 # External Greeter Pack
 
-This directory is a standalone repository fixture. Copy it outside OAW before
-building it. It imports only `open_agent_world.plugin_api` and `@oaw/plugin-api`;
-there are no host source paths or bundler aliases into the OAW checkout.
+This standalone Schema 3 Python-backed example declares its distribution in
+`oaw.pack.toml` and imports only `open_agent_world.plugin_api` and `@oaw/plugin-api`.
+Copy it outside OAW before building; no host source aliases are required.
 
-1. Obtain the local frontend SDK tarball (the OAW host maintainer runs
-   `npm run build:pack-sdk` then `npm pack ./pack-sdk` in `frontend/`).
-2. `npm install /path/to/oaw-plugin-api-1.0.0.tgz`
-3. `npm run build`
-4. `uv build --wheel --out-dir dist/backend`
-5. With the host Python distribution, run
-   `python -m open_agent_world.pack build /path/to/greeter/dist /path/to/greeter-0.1.0.oawpack`.
-6. Open OAW's Pack Library, choose **Install Pack from File...**, inspect the
-   package and install it. Restart OAW, wait for Sandbox runtime **Ready**,
-   open Greeter, add its card to your deck, place it and click **Greet**.
+1. Obtain the frontend SDK tarball (`npm run build:pack-sdk`, then
+   `npm pack ./pack-sdk` in OAW's `frontend/`).
+2. Run `npm install /path/to/oaw-plugin-api-1.0.0.tgz` and `npm run build`.
+3. Run `uv build --wheel --out-dir dist/backend`.
+4. With OAW's Python interpreter, package and inspect:
 
-The declared `colorama==0.4.6` dependency is provisioned by the existing shared
-Sandbox Python runtime; it is deliberately not imported into the host backend.
+```sh
+python /absolute/path/to/OAW/scripts/oaw-pack.py build-project /path/to/greeter /path/to/greeter-0.2.0.oawpack \
+  --backend-wheel /path/to/greeter/dist/backend/oaw_pack_example_greeter-0.2.0-py3-none-any.whl \
+  --frontend-dir /path/to/greeter/dist/frontend
+python /absolute/path/to/OAW/scripts/oaw-pack.py inspect /path/to/greeter-0.2.0.oawpack
+```
+
+Install from the Pack Library, restart OAW, add Greeter to your deck and use
+**Greet**. The existing distribution, runtime owner and card IDs are preserved;
+Schema 1 archives are unsupported. Use the [Card App tutorial](../../../docs/developers/card-app.md)
+for a separate example that also grants an Agent capability.
+
+`scripts/build-external-greeter.py` performs this build in an external temporary
+directory. `npm run test:e2e:packs` validates installation, restart, frontend
+loading and persisted greetings. The fixture needs no Sandbox packages.
 
 ## Progressive help
 

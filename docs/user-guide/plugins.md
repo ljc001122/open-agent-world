@@ -60,9 +60,8 @@ Open it, add its cards to your Deck and place them in your World.
 
 **Update available** offers an explicit **Update** action; OAW does not update
 Packs automatically. If the Store is unavailable, use **Retry** later. Your
-existing Packs, Cards, Deck and World keep working. The official endpoint is
-not deployed yet; development builds can connect through the host override
-described in [Pack Store Client V0](../pack-store.md).
+existing Packs, Cards, Deck and World keep working. OAW connects to the official
+Marketplace at `https://open-agent-world.space` automatically. Install required dependency Packs first if the installation plan reports them.
 
 ## Disable or remove a Pack
 
@@ -78,4 +77,5 @@ An inactive version can be removed after it is neither selected nor loaded.
 Core functionality stays enabled. Source, bundled and downloaded Packs share
 the same enrollment and cleanup checks.
 
-To create your own, see [Pack installation and distribution](../pack-distribution.md).
+Create cards without code in [Card Factory](../card-factory.md), or build a
+Python/React Card App with the [developer guide](../developers/index.md).

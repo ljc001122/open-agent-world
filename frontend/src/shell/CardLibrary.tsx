@@ -13,7 +13,7 @@ import { collectedLibraryCards, collectedLibraryLegions, compareLibraryCards, di
 import { LibraryPack } from "./LibraryPack";
 import { PackInstaller } from "./PackInstaller";
 import { InstalledPackDetails } from "./InstalledPackDetails";
-import { installedPackStatus, packInventory, packIssue } from "./installedPacks";
+import { installedPackStatus, packInventory } from "./installedPacks";
 import { usePackInstallations } from "../state/packInstallations";
 import type { PackInstallations } from "../types/packs";
 import { PackStore } from "./PackStore";
@@ -23,6 +23,8 @@ import { LibraryCard as PhysicalLibraryCard, LibraryCardPreview } from "./Librar
 import "./cardLibrary.css";
 import { startPalettePointerDrag } from "../palette/pointerDrag";
 import { isHosted } from '../auth/hostedSession';
+import { Modal } from '../components/Modal';
+import { PackIDE } from '../factory/PackIDE';
 
 type Tab = "packs" | "cards" | "store";
 const PAGE_SIZE = 30;
@@ -54,6 +56,9 @@ export function CardLibrary() {
   const [installAction, setInstallAction] = useState<HTMLDivElement | null>(null);
   const [inspectedPack, setInspectedPack] = useState<string | null>(null);
   const [packNotice, setPackNotice] = useState('');
+  const [showPackIDE, setShowPackIDE] = useState(false);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [projectDirty, setProjectDirty] = useState(false);
   const installations = usePackInstallations(library.open && !hosted);
   const acceptInstallations = (value: PackInstallations) => {
     const removed = installations.state?.versions.some(previous => previous.selected
@@ -106,6 +111,7 @@ export function CardLibrary() {
   const inventory = snapshot ? packInventory(snapshot, installations.state) : [];
   const packDetail = inventory.find(item => item.pack.definition.id === inspectedPack);
   const sourcePack = sourceFilter.startsWith("pack:") ? snapshot?.packs[sourceFilter.slice(5)] : undefined;
+  const sourceIssues = inventory.find(item => item.pack.definition.id === sourcePack?.definition.id)?.failures ?? [];
   const sourcePlugin = sourcePack && snapshot?.plugins[sourcePack.definition.plugin_id];
   const newSourceCards = sourcePack?.definition.cards.filter(id => !snapshot?.collection[id]?.source_pack_ids.includes(sourcePack.definition.id)).length ?? 0;
   const deck = snapshot?.decks.find(item => item.id === snapshot.active_deck_id);
@@ -178,18 +184,26 @@ export function CardLibrary() {
       <div className={`library-body${tab === "cards" ? " library-body--cards" : ""}`}>
         {tab === "packs" ? <>
           {library.open && !hosted ? <PackInstaller actionTarget={installAction} installations={installations.state} onInstalled={value => { acceptInstallations(value); setInspectedPack(null); setQuery(''); }} /> : null}
-          <PackOperations operations={installations.state?.operations} />
+          <PackOperations operations={installations.state?.operations?.filter(operation => (!packDetail && operation.state !== 'failed') || operation.pack_id === packDetail?.inventory?.id || packDetail?.versions.some(item => item.id === operation.pack_id))} />
           {installations.error && <p className="pack-action-error" role="alert">{installations.error}</p>}
           {packNotice && <p className="pack-restart-note" role="status">{t(packNotice)}</p>}
           {packDetail ? <InstalledPackDetails key={packDetail.pack.definition.id} {...packDetail} snapshot={snapshot}
             onBack={() => setInspectedPack(null)} onBrowse={browsePack} onChanged={acceptInstallations} /> : <>
           <div className="library-section-heading"><div><h3>{t("Pack inventory")}</h3><p>{t("Open an owned pack to add its contents to your Card Library.")}</p></div>
             <label className="library-search"><Search size={15} /><input aria-label={t("Search packs")} placeholder={t("Search packs")} value={query} onChange={event => setQuery(event.target.value)} /></label></div>
-          <div className="pack-grid">{inventory.filter(({ pack }) => `${pack.definition.name} ${pack.definition.description} ${t(pack.definition.name)} ${t(pack.definition.description)} ${pack.definition.plugin_id}`.toLowerCase().includes(query.toLowerCase())).map(({ pack, versions, inventory: runtime, registered }) =>
+          <div className="pack-grid">{inventory.filter(({ pack }) => `${pack.definition.name} ${pack.definition.description} ${t(pack.definition.name)} ${t(pack.definition.description)} ${pack.definition.plugin_id}`.toLowerCase().includes(query.toLowerCase())).map(({ pack, versions, inventory: runtime, registered, failures }) =>
             <LibraryPack key={pack.definition.id} pack={pack} snapshot={snapshot} onOpened={setReveal} onBrowse={browsePack}
-              onInspect={(versions.length || runtime) && (pack.opened || packIssue(pack, snapshot, versions) || !snapshot.available_pack_ids.includes(pack.definition.id)) ? () => setInspectedPack(pack.definition.id) : undefined}
+              onInspect={(versions.length || runtime || failures.length) ? () => setInspectedPack(pack.definition.id) : undefined}
+              failed={failures.length > 0 || runtime?.environments.some(environment => environment.state === 'failed')}
               versions={versions} status={versions.length ? installedPackStatus(versions) : runtime?.enrolled === false ? runtime.loaded ? 'Uninstall pending restart' : 'Pack uninstalled' : undefined} contentCountKnown={registered} />
-          )}</div>
+          )}
+          {installations.state?.failures?.filter(failure => !inventory.some(item => item.failures.includes(failure))).map((failure, index) =>
+            <details key={`failure:${index}`} className="pack-action-error" aria-label={failure.id}>
+              <summary>{failure.id} · {t('Unavailable')}</summary>
+              <p>{failure.error}</p>
+              <p>{t('Repair or reinstall this Pack, then restart OAW to retry. Saved cards and connections are retained.')}</p>
+            </details>)}
+          </div>
           {reveal && snapshot.packs[reveal] ? <span className="library-announcement" role="status">{t(snapshot.packs[reveal].definition.name)} {t("opened. Click its empty wrapper to view cards.")}</span> : null}
           </>}
         </> : null}
@@ -205,6 +219,7 @@ export function CardLibrary() {
             {!hosted && sourcePlugin?.installed && sourcePack.definition.plugin_id !== "open-agent-world.core" ? <button className="library-text-button" disabled={library.busy}
               onClick={() => void library.edit({ action: "set_plugin_enabled", id: sourcePack.definition.plugin_id, enabled: !sourcePlugin.enabled })}>{sourcePlugin.enabled ? t("Disable Pack") : t("Enable Pack")}</button> : null}
           </div> : null}
+          {sourceIssues.map((failure, index) => <p key={index} className="pack-action-error" role="alert">{failure.error}</p>)}
           <div className="library-tools"><label className="library-search"><Search size={15} /><input aria-label={t("Search cards")} value={query} onChange={event => setQuery(event.target.value)} placeholder={t("Search your cards")} /></label>
             <select aria-label={t("Source pack")} value={sourceFilter} onChange={event => setSourceFilter(event.target.value)}><option value="">{t("All packs")}</option>{sourcePack && !sources.some(source => source.id === sourceFilter) ? <option value={sourceFilter}>{t(sourcePack.definition.name)}</option> : null}{sources.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
             <select aria-label={t("Card category")} value={filter} onChange={event => setFilter(event.target.value)}><option value="">{t("All categories")}</option>{categories.map(category => <option key={category} value={category}>{t(category)}</option>)}</select>
@@ -244,5 +259,12 @@ export function CardLibrary() {
         </> : null}
         {tab === "store" && library.open ? <PackStore installations={installations.state} /> : null}
       </div>}
-  </dialog></>;
+    {!hosted && <details className="library-developer-tools"><summary>{t('Developer tools')}</summary>
+      <button className="library-text-button" onClick={() => setShowPackIDE(true)}>Pack IDE <span className="pack-ide-experimental" title={t('Visual authoring is still in development.')}>{t('Experimental')}</span></button>
+    </details>}
+  </dialog>{showPackIDE && <Modal title="Pack IDE" className="pack-ide-modal" portalHost={document.body} busy={projectBusy} onClose={() => {
+    if (!projectDirty || window.confirm('Discard your unsaved project edits?')) setShowPackIDE(false);
+  }}><PackIDE onDirtyChange={setProjectDirty} onBusyChange={setProjectBusy} onClose={() => {
+    if (!projectDirty || window.confirm('Discard your unsaved project edits?')) setShowPackIDE(false);
+  }} /></Modal>}</>;
 }

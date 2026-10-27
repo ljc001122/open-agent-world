@@ -1,5 +1,8 @@
 # Canvas interaction performance
 
+> Historical record, not current product or deployment instructions. Verify against the current source before use.
+
+
 > Historical investigation. The SVG terrain renderer and Canvas2D experiment have
 > since been removed. See [the current WebGL background](../../terrain-webgl.md) and
 > [the 1,000-card input fix](stress-zoom.md). Old renderer flags and SVG-specific
@@ -185,7 +188,7 @@ $env:OAW_PERF_REPORT = '../.outputs/canvas-performance.json'
 node scripts/run-e2e.mjs e2e/canvas-performance.spec.ts
 ```
 
-The runner resets only `.open-agent-world/playwright` and starts services on
+The runner resets only `.tmp/playwright/data` and starts services on
 5177/8017. Run one isolated runner at a time. The report contains frame intervals
 and CDP script/layout/style durations; `.outputs/canvas-performance.png` shows the
 resulting scene.
