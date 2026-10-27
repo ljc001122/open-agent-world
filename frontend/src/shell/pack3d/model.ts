@@ -58,22 +58,17 @@ export function createPackModel(options: PackRenderOptions, micro: ReturnType<ty
     mesh(body, new RoundedBoxGeometry(.026, 3.21, .17, 2, .012), paper, 'left-fold', new Vector3(-1.112, 0, 0));
     mesh(body, new RoundedBoxGeometry(.026, 3.21, .17, 2, .012), paper, 'right-fold', new Vector3(1.112, 0, 0));
     mesh(body, new RoundedBoxGeometry(2.23, .026, .17, 2, .012), paper, 'bottom-fold', new Vector3(0, -1.6, 0));
-    const flap = paperFlapGeometry(), normals = flap.getAttribute('normal');
-    flap.clearGroups();
-    for (let i = 0; i < normals.count; i += 3) flap.addGroup(i, 3, normals.getZ(i) > .9 ? 0 : 1);
-    // Coalesce adjacent groups so the flap does not create hundreds of draw calls.
-    const groups = [...flap.groups]; flap.clearGroups();
-    for (const group of groups) { const previous = flap.groups.at(-1); if (previous && previous.materialIndex === group.materialIndex && previous.start + previous.count === group.start) previous.count += group.count; else flap.addGroup(group.start, group.count, group.materialIndex); }
     const flapFace = materials.front.clone(); flapFace.map = print.flap; flapFace.roughnessMap = null;
-    mesh(closure, flap, [flapFace, paper], 'arched-flap');
+    mesh(closure, paperFlapGeometry(), [flapFace, paper], 'arched-flap');
     closure.position.set(0, 1.61, .103);
     const stampMaterial = new MeshPhysicalMaterial({ color: '#e6dec7', roughness: .72, bumpMap: micro.paper, bumpScale: .006, name: 'paper-seal' });
     const stamp = mesh(closure, new CylinderGeometry(.16, .16, .023, 48), stampMaterial, 'embossed-seal', new Vector3(0, -.86, .033));
     stamp.rotation.x = Math.PI / 2;
-    // A small leaf-shaped emboss, made from real curves on the paper seal.
-    const leaf = new Mesh(new RoundedBoxGeometry(.025, .16, .012, 3, .012), new MeshStandardMaterial({ color: '#789071', roughness: .8 }));
+    // This small emboss needs rounded edges, but not inspection-scale subdivision.
+    const leaf = new Mesh(new RoundedBoxGeometry(.025, .16, .012, 1, .012), new MeshStandardMaterial({ color: '#789071', roughness: .8 }));
     leaf.position.set(0, -.86, .052); leaf.rotation.z = -.35; closure.add(leaf);
-    for (const sign of [-1, 1]) { const blade = leaf.clone(); blade.geometry = new RoundedBoxGeometry(.058, .10, .009, 4, .025); blade.position.set(sign * .035, -.85, .052); blade.rotation.z = sign * -.55; closure.add(blade); }
+    const bladeGeometry = new RoundedBoxGeometry(.058, .10, .009, 1, .025);
+    for (const sign of [-1, 1]) { const blade = leaf.clone(); blade.geometry = bladeGeometry; blade.position.set(sign * .035, -.85, .052); blade.rotation.z = sign * -.55; closure.add(blade); }
   }
   const originalMaterials = new Map<Mesh, Material | Material[]>(); root.traverse(object => { if (object instanceof Mesh) originalMaterials.set(object, object.material); });
   // Sealed packs and empty wrappers never show their cards. Prepare those

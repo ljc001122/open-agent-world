@@ -1,5 +1,5 @@
-import { ACESFilmicToneMapping, Box3, DirectionalLight, Mesh, MeshBasicMaterial, MeshStandardMaterial, OrthographicCamera,
-  PCFShadowMap, PMREMGenerator, Scene, SRGBColorSpace, WebGLRenderer, type WebGLRenderTarget } from 'three';
+import { ACESFilmicToneMapping, Box3, DirectionalLight, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, OrthographicCamera,
+  PCFShadowMap, PMREMGenerator, Scene, SRGBColorSpace, WebGLRenderer, type BufferGeometry, type Material, type WebGLRenderTarget } from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createMicrostructure } from './materials';
 import { createPackModel } from './model';
@@ -12,6 +12,7 @@ type Model = ReturnType<typeof createPackModel>;
 interface Slot {
   canvas: HTMLCanvasElement; context: CanvasRenderingContext2D; options: PackRenderOptions;
   model?: Model; key: string; viewKey: string; visible: boolean; dirty: boolean; ready: boolean; opening: number;
+  prepared?: string; preparing?: { key: string; programs: NonNullable<WebGLRenderer['info']['programs']> };
   yaw: number; pitch: number; hoverX: number; hoverY: number; tiltX: number; tiltY: number; drawnAt: number;
   onReady(ready: boolean): void;
 }
@@ -38,6 +39,18 @@ class PackRenderer {
   private frame = 0;
   private lost = false;
   private cursor = 0;
+  private shadowPrepared = false;
+  private readonly intersections = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const slot = [...this.slots].find(item => item.canvas === entry.target);
+      if (!slot) continue;
+      slot.visible = entry.isIntersecting;
+      if (slot.visible) slot.dirty = true;
+    }
+    // Apply visibility as a batch before choosing a row. Separate observers
+    // can report a lower preview before the first row in the same viewport.
+    this.invalidate();
+  }, { rootMargin: '60px' });
   renders = 0;
   constructor() {
     this.renderer.setSize(BUFFER, BUFFER, false); this.renderer.setPixelRatio(1);
@@ -65,30 +78,74 @@ class PackRenderer {
   }
   private contextLost = (event: Event) => {
     event.preventDefault(); this.lost = true; cancelAnimationFrame(this.frame); this.frame = 0;
-    this.slots.forEach(slot => { slot.ready = false; slot.onReady(false); });
+    this.shadowPrepared = false;
+    this.slots.forEach(slot => { slot.prepared = undefined; slot.preparing = undefined; slot.ready = false; slot.onReady(false); });
   };
   private contextRestored = () => { this.lost = false; this.makeEnvironment(); this.slots.forEach(slot => { slot.dirty = true; }); this.invalidate(); };
   private visibility = () => { if (!document.hidden) { this.slots.forEach(slot => { slot.dirty = true; }); this.invalidate(); } };
   invalidate = () => { if (!this.frame && !this.lost && !document.hidden) this.frame = requestAnimationFrame(this.draw); };
+  private prepare(slot: Slot) {
+    // compile() traverses hidden objects and unused material-array entries. Only
+    // submit the surfaces that this pose actually draws (ordinary bags have an
+    // unused foil material, and sealed packs do not need their contents).
+    const surfaces: { geometry: BufferGeometry; materials: Material[]; receiveShadow: boolean }[] = [];
+    slot.model!.root.traverseVisible(object => {
+      if (!(object instanceof Mesh)) return;
+      const geometry = object.geometry as BufferGeometry, material = object.material as Material | Material[];
+      const materials = Array.isArray(material)
+        ? [...new Set(geometry.groups.filter(part => part.count > 0).map(part => material[part.materialIndex ?? 0]))]
+        : [material];
+      surfaces.push({ geometry, materials, receiveShadow: object.receiveShadow });
+    });
+    const key = surfaces.flatMap(surface => surface.materials.map(material => `${material.uuid}:${material.version}`)).join(',');
+    if (slot.prepared === key) return true;
+    if (slot.preparing?.key !== key) {
+      if (!this.shadowPrepared) { this.contact.prepare(this.renderer, this.scene); this.shadowPrepared = true; }
+      const group = new Group();
+      for (const { geometry, materials, receiveShadow } of surfaces) {
+        const mesh = new Mesh(geometry, materials); mesh.receiveShadow = receiveShadow; group.add(mesh);
+      }
+      this.renderer.compile(group, this.camera, this.scene);
+      // Include the composited shadow plane in the same lighting/target state.
+      this.renderer.compile(this.contact.plane, this.camera, this.scene);
+      slot.preparing = { key, programs: [...(this.renderer.info.programs ?? [])] };
+      // Always give the browser a frame before first use, including on devices
+      // without parallel shader compilation.
+      return false;
+    }
+    const gl = this.renderer.getContext(), parallel = gl.getExtension('KHR_parallel_shader_compile');
+    if (parallel && slot.preparing.programs.some(program => program.program
+      && !gl.getProgramParameter(program.program as WebGLProgram, parallel.COMPLETION_STATUS_KHR))) return false;
+    // Poll in our cancellable RAF instead of compileAsync's internal timers:
+    // a model can be replaced/disposed or its GPU context lost while preparing.
+    slot.prepared = key; slot.preparing = undefined;
+    return true;
+  }
   private draw = (now: number) => {
     this.frame = 0; let animate = false, built = false, worked = false;
     const started = performance.now(), slots = [...this.slots], start = this.cursor % Math.max(1, slots.length);
-    for (let index = 0; index < slots.length; index++) {
-      const position = (start + index) % slots.length, slot = slots[position];
+    // Prepare the uppermost unfinished visible row before lower rows. Already
+    // displayed views keep round-robin service so hover/opening stays responsive.
+    const waiting = slots.filter(slot => slot.visible && !slot.ready && slot.canvas.isConnected)
+      .map(slot => ({ slot, bounds: slot.canvas.getBoundingClientRect() })).filter(item => item.bounds.width && item.bounds.height)
+      .sort((a, b) => a.bounds.top - b.bounds.top || a.bounds.left - b.bounds.left);
+    const row = waiting.filter(item => item.bounds.top < (waiting[0]?.bounds.top ?? 0) + 1).map(item => item.slot);
+    const ordered = [...row, ...slots.slice(start), ...slots.slice(0, start)].filter((slot, index, all) => all.indexOf(slot) === index);
+    for (const slot of ordered) {
       if (!slot.visible || !slot.dirty) continue;
+      if (!slot.ready && !row.includes(slot)) { animate = true; continue; }
       const canvas = slot.canvas, width = canvas.clientWidth, height = canvas.clientHeight;
       if (width < 1 || height < 1 || !canvas.isConnected) continue;
       // Yield between expensive views, including on the first frame. Rotate the
       // starting point so an animated pack cannot starve later visible packs.
       if (worked && (performance.now() - started >= 6 || (built && !slot.model))) {
-        this.cursor = position; animate = true; break;
+        this.cursor = slots.indexOf(slot); animate = true; break;
       }
-      worked = true; this.cursor = (position + 1) % slots.length;
+      worked = true; this.cursor = (slots.indexOf(slot) + 1) % slots.length;
       try {
         if (!slot.model) { slot.model = createPackModel(slot.options, this.micro, () => { slot.dirty = true; this.invalidate(); }); built = true; }
         const scale = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2, BUFFER / width, BUFFER / height);
         const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
-        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
         const o = slot.options;
         const damping = 1 - Math.exp(-Math.min(.05, (now - slot.drawnAt) / 1000) / .05);
         slot.drawnAt = now;
@@ -99,6 +156,13 @@ class PackRenderer {
         const progress = o.view.opening ?? (o.revealing ? o.reducedMotion ? .6 : Math.min(1, (now - slot.opening) / 2000) : o.opened ? 1 : 0);
         const revealing = o.view.opening !== undefined ? progress > 0 && progress < 1 : o.revealing;
         slot.model.pose(progress, revealing, o.finishVisible || o.view.opening !== undefined);
+        slot.model.surface(o.view.surface === 'clay' ? this.clay : o.view.surface === 'wireframe' ? this.wire : undefined);
+        // Static views can wait for compilation. A reveal is already timed by
+        // its owner; retain immediate drawing so waiting cannot skip the reveal.
+        if (!this.prepare(slot) && !o.revealing) { animate = true; continue; }
+        // Keep the previous bitmap intact while shaders for a changed pose or
+        // surface are preparing. Resizing a canvas would otherwise erase it.
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
         const light = (o.view.light ?? 0) * degrees;
         this.scene.environmentRotation.set(0, light, 0);
         this.key.position.set(-3.5 * Math.cos(light) + 4 * Math.sin(light), 5.5, 5 * Math.cos(light) + 3.5 * Math.sin(light));
@@ -122,7 +186,6 @@ class PackRenderer {
         const centerY = Math.max(this.bounds.max.y - viewHeight / 2 + margin, Math.min(spread * .44, this.bounds.min.y + viewHeight / 2 - margin));
         this.camera.left = centerX - halfWidth; this.camera.right = centerX + halfWidth;
         this.camera.top = viewHeight / 2 + centerY; this.camera.bottom = -viewHeight / 2 + centerY; this.camera.updateProjectionMatrix();
-        slot.model.surface(o.view.surface === 'clay' ? this.clay : o.view.surface === 'wireframe' ? this.wire : undefined);
         this.scene.add(slot.model.root);
         this.contact.render(this.renderer, this.scene, this.key.position);
         this.renderer.setViewport(0, 0, w, h); this.renderer.setScissor(0, 0, w, h); this.renderer.setScissorTest(true);
@@ -155,13 +218,13 @@ class PackRenderer {
       yaw: defaultYaw(options), pitch: options.view.pitch ?? -3, hoverX: 0, hoverY: 0, tiltX: 0, tiltY: 0, drawnAt: performance.now(), onReady };
     this.slots.add(slot);
     const resize = new ResizeObserver(() => { slot.dirty = true; this.invalidate(); }); resize.observe(canvas);
-    const visibility = new IntersectionObserver(([entry]) => { slot.visible = entry.isIntersecting; if (slot.visible) { slot.dirty = true; this.invalidate(); } }, { rootMargin: '60px' }); visibility.observe(canvas);
+    this.intersections.observe(canvas);
     this.invalidate();
     return {
       update: next => {
         const key = packModelKey(next), viewKey = packViewKey(next);
         if (key === slot.key && viewKey === slot.viewKey) return;
-        if (key !== slot.key) { slot.model?.dispose(); slot.model = undefined; slot.key = key; }
+        if (key !== slot.key) { slot.preparing = undefined; slot.prepared = undefined; slot.model?.dispose(); slot.model = undefined; slot.key = key; }
         if (next.revealing && !slot.options.revealing) slot.opening = performance.now();
         if (next.view.yaw !== slot.options.view.yaw || next.view.pitch !== slot.options.view.pitch) {
           slot.yaw = defaultYaw(next); slot.pitch = next.view.pitch ?? -3; slot.hoverX = slot.hoverY = slot.tiltX = slot.tiltY = 0;
@@ -172,11 +235,12 @@ class PackRenderer {
       rotate: (yaw, pitch) => { slot.yaw = yaw; slot.pitch = Math.max(-75, Math.min(75, pitch)); slot.hoverX = slot.hoverY = slot.tiltX = slot.tiltY = 0; slot.dirty = true; this.invalidate(); },
       angles: () => ({ yaw: slot.yaw, pitch: slot.pitch }),
       hover: (x, y) => { if (slot.options.reducedMotion) return; const angles = hoverAngles(x, y); if (slot.hoverX === angles.yaw && slot.hoverY === angles.pitch) return; slot.hoverX = angles.yaw; slot.hoverY = angles.pitch; slot.dirty = true; this.invalidate(); },
-      destroy: () => { resize.disconnect(); visibility.disconnect(); slot.model?.dispose(); this.slots.delete(slot); if (!this.slots.size) scheduleDispose(this); },
+      destroy: () => { resize.disconnect(); this.intersections.unobserve(canvas); slot.preparing = undefined; slot.model?.dispose(); this.slots.delete(slot); if (!this.slots.size) scheduleDispose(this); },
     };
   }
   dispose() {
     cancelAnimationFrame(this.frame);
+    this.intersections.disconnect();
     document.removeEventListener('visibilitychange', this.visibility);
     this.renderer.domElement.removeEventListener('webglcontextlost', this.contextLost);
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.contextRestored);
@@ -188,7 +252,7 @@ let shared: PackRenderer | undefined;
 let disposal = 0;
 function scheduleDispose(renderer: PackRenderer) {
   window.clearTimeout(disposal);
-  disposal = window.setTimeout(() => { if (shared === renderer && !renderer.slots.size) { renderer.dispose(); shared = undefined; } }, 1200);
+  disposal = window.setTimeout(() => { if (shared === renderer && !renderer.slots.size) { renderer.dispose(); shared = undefined; } }, 5000);
 }
 export function attachPackRenderer(canvas: HTMLCanvasElement, options: PackRenderOptions, onReady: (ready: boolean) => void) {
   window.clearTimeout(disposal);

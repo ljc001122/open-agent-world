@@ -674,15 +674,6 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                       messageInput.current?.focus();
                     }}>{t('Review safe continuation')}</button>}
                 </div>}
-                {(message.content || message.sender_kind === 'user') && <div className="conversation-message-actions">
-                  {message.content && <IconButton icon={copiedMessageId === message.id ? Check : Copy} size="sm" quiet
-                    label={t(copiedMessageId === message.id ? 'Message copied' : 'Copy message')}
-                    onClick={() => void copyMessage(message)} />}
-                  {message.sender_kind === 'user' && !visibleOutgoing.some(item => item.message.id === message.id && item.status !== 'confirmed') && <IconButton
-                    icon={GitBranch} size="sm" quiet label={t('Branch in new chat')}
-                    disabled={busy || uploading || !!draft.trim() || attachments.length > 0 || activeRuns.length > 0}
-                    onClick={() => void restartFrom(message)} />}
-                </div>}
                 {message.sender_kind === "user" ? (() => {
                   const queued = history.deliveries.filter((delivery) => delivery.message_id === message.id && delivery.status === "queued");
                   if (!queued.length) return null;
@@ -700,6 +691,15 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                   }}>{t('Copy back to composer')}</button>
                 </div> : null}
               </div>
+              {(message.content || message.sender_kind === 'user') && <footer className="conversation-message-actions">
+                {message.content && <IconButton icon={copiedMessageId === message.id ? Check : Copy} size="sm" quiet
+                  label={t(copiedMessageId === message.id ? 'Message copied' : 'Copy message')}
+                  onClick={() => void copyMessage(message)} />}
+                {message.sender_kind === 'user' && !visibleOutgoing.some(item => item.message.id === message.id && item.status !== 'confirmed') && <IconButton
+                  icon={GitBranch} size="sm" quiet label={t('Branch in new chat')}
+                  disabled={busy || uploading || !!draft.trim() || attachments.length > 0 || activeRuns.length > 0}
+                  onClick={() => void restartFrom(message)} />}
+              </footer>}
             </article>
             );
             };
