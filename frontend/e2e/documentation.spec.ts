@@ -6,7 +6,7 @@ test('bundled documentation works with no external network, native modal focus a
   const preferences = await request.patch('/api/application/preferences', { data: {
     profile_id: profile.profile_id, generation: profile.generation,
     changes: {
-      'oaw.locale': 'en', 'oaw-theme': 'light',
+      'oaw.locale': 'en', 'oaw-theme': 'light', 'oaw.documentation.locale': null,
       'oaw-onboarding-v1': JSON.stringify({ state: { status: 'skipped' }, version: 1 }),
     },
   } });
@@ -37,6 +37,20 @@ test('bundled documentation works with no external network, native modal focus a
   await dialog.getByRole('button', { name: 'Packs and cards', exact: true }).click();
   await expect(dialog.getByRole('heading', { name: 'Install a local Pack' })).toBeVisible();
   await search.fill('');
+  const language = dialog.getByRole('combobox', { name: 'Documentation language' });
+  await language.selectOption('zh-CN');
+  await expect(dialog.getByRole('heading', { name: '卡包与牌组', level: 1 })).toBeVisible();
+  await expect(help).toBeVisible(); // Reading language does not change application chrome.
+  await expect(dialog.getByRole('article').getByRole('link', { name: 'English', exact: true })).toHaveCount(0);
+  await expect.poll(async () => (await (await request.get('/api/application')).json()).values['oaw.documentation.locale']).toBe('zh-CN');
+  await page.keyboard.press('Escape');
+  await help.click();
+  await page.getByRole('menuitem', { name: 'Documentation' }).click();
+  await expect(dialog.getByRole('heading', { name: '使用入门', level: 1 })).toBeVisible();
+  await expect(language).toHaveValue('zh-CN');
+  await dialog.getByRole('button', { name: 'Troubleshooting', exact: true }).click();
+  await expect(dialog.getByText('此主题暂无 简体中文 译文，当前显示 English。')).toBeVisible();
+  await language.selectOption('');
   await page.screenshot({ path: 'test-results/documentation-light.png' });
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);

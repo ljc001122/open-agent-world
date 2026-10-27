@@ -1,7 +1,5 @@
 # 卡包与牌组
 
-[English](plugins.md)
-
 卡包提供卡片和工具。安装、收藏、加入牌组、放置到世界是不同步骤。
 
 ## 使用已安装卡包
@@ -26,4 +24,4 @@
 
 升级前检查新版本要求。详情中的 **Use this version on restart** 可选择保留的旧版本。移除前先处理世界中的使用和依赖；**Uninstall Pack** 会显示阻碍与资源清理计划。收藏、牌组引用和用户数据保留；源码卡包的卸载不会删除源码目录。
 
-不写代码制作卡片，阅读[卡片工厂](../card-factory.zh-CN.md)。编写完整 Card App，阅读[开发指南](../developers/index.zh-CN.md)。
+不写代码制作卡片，阅读[卡片工厂](../card-factory.md)。编写完整 Card App，阅读[开发指南](../developers/index.md)。

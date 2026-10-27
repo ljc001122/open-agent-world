@@ -1,7 +1,5 @@
 # Models and settings
 
-[简体中文](models.zh-CN.md)
-
 An Agent needs a model connection to respond. A connection tells OAW which service to use and how to sign in; a model selects the specific model offered by that service.
 
 ## Connect a model

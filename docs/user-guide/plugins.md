@@ -1,7 +1,5 @@
 # Packs and cards
 
-[简体中文](plugins.zh-CN.md)
-
 Packs add cards and tools to your world. Open a Pack to collect its cards, choose
 which belong in your Deck, then place them in your World.
 

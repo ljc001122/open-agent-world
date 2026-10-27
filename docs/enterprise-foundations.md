@@ -2,7 +2,7 @@
 
 OAW's local runtime owns one World per profile database. Hosted access can route
 users to separate profiles; this is not shared-database multi-tenancy or an
-implemented general enterprise RBAC service. See [hosting](contributing/hosting.zh-CN.md).
+implemented general enterprise RBAC service. See [hosting](contributing/hosting.md).
 
 Socket peer/host-token authentication, deployment sessions and Agent graph grants
 remain distinct. Forwarding or caller-supplied identity headers never create authority.

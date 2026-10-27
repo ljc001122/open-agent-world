@@ -1,7 +1,5 @@
 # Install Open Agent World
 
-**English** | [简体中文](https://github.com/theAfish/open-agent-world/blob/dev/docs/release-notes.zh-CN.md)
-
 ## Download
 
 Expand **Assets** on the release page and choose an installer provided for your computer:

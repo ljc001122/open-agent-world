@@ -1,7 +1,5 @@
 # Open Agent World documentation
 
-[简体中文](README.zh-CN.md)
-
 These pages describe the **dev branch**. The manual bundled with an installed OAW
 build describes that build; use its **Help → Documentation** when a website step
 does not match your app. Check the release notes before expecting a dev feature

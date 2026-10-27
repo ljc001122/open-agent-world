@@ -1,6 +1,6 @@
 # Card Factory
 
-[Chinese guide](card-factory.zh-CN.md)
+[Chinese guide](card-factory.md)
 
 Card Factory is a bundled Pack with ID `oaw.factory`. Open it in **Library → Packs** and place its workbench on the canvas. The
 workbench contains five connected devices; you can also place and connect

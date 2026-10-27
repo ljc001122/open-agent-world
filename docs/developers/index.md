@@ -1,7 +1,5 @@
 # Build a Card App
 
-[简体中文](index.zh-CN.md)
-
 A Card App adds behavior and optionally a custom interface to an OAW card. A Pack
 is the installable distribution containing those contributions. Develop in an
 external IDE with the public Python and React/TypeScript SDKs; a Coding Agent

@@ -1,7 +1,5 @@
 # Your first team
 
-[简体中文](first-team.zh-CN.md)
-
 **Goal:** an Agent reads a short brief and answers in a Conversation. Have a working
 [model connection](models.md) ready. You do not need a Sandbox.
 

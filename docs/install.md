@@ -1,7 +1,5 @@
 # Download and install
 
-**English** | [简体中文](install.zh-CN.md)
-
 Open [GitHub Releases](https://github.com/theAfish/open-agent-world/releases), select a published version, and expand **Assets**. If there are no published releases yet, installers are not publicly available yet.
 
 | Your computer | Download |

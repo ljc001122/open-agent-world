@@ -1,7 +1,5 @@
 # Use Open Agent World
 
-[简体中文](index.zh-CN.md)
-
 Use an Agent to read a document and help with a task. You need a model connection
 for its reply; the first exercise needs no Sandbox or programming.
 

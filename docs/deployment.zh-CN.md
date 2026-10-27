@@ -2,9 +2,9 @@
 
 想先体验成品？运行 `python examples/deployed-workspace/run.py`，浏览器会打开无需 API Key 的本地部署示例。密码为 `oaw-demo-2026`，详见[示例说明](../examples/deployed-workspace/README.md)。若想体验真正调用模型的已发布 Legion，见 [Lab Manager 部署示例](../examples/knowledge-legion-deploy/README.md)（英文）。
 
-[文档目录](README.zh-CN.md) · [English](deployment.md)
+[文档目录](README.md)
 
-需要每位用户独立的账号、会话和文件，并在登录后直接进入部署页面时，请使用基于 Linux systemd 的[多用户托管](contributing/hosting.zh-CN.md)，无需 Docker。下文介绍单个部署实例的共享密码访问方式。
+需要每位用户独立的账号、会话和文件，并在登录后直接进入部署页面时，请使用基于 Linux systemd 的[多用户托管](contributing/hosting.md)，无需 Docker。下文介绍单个部署实例的共享密码访问方式。
 
 工程师在原工作区配置模型连接、Agent、工具和 Legion 布局，然后发布应用。部署程序生成独立的数据副本，并启动只提供用户功能的服务。用户登录后直接进入固定布局；画布、连线、模型连接、插件设置和管理 API 均不向用户开放。
 
@@ -121,7 +121,7 @@ journalctl -u oaw-runtime -f
 
 部署页面直接复用 Legion Workspace、WorkspaceSection 和现有的 Conversation / Sandbox / Task Board / Text / Image 组件。分栏比例与布局固定，标签可切换，切换标签保留草稿；主题和语言也沿用原控件。只移除布局编辑、返回画布、设置、未放置卡片入口与组件内的工程配置。文本沿用原文本组件，以只读方式显示。
 
-第三方文档型卡片可用 `NodeDeploymentDefinition.from_document()` 直接复用原文档业务接口与 WorkspaceSection；含私有数据的卡片继续声明精细权限。无需单独编写 Workspace HTTP 接口。MatCreator 原有研究布局可以直接发布，未声明的其他自定义页面仍保持私有。发布面板会提前列出各页面的兼容性问题。详见[插件部署接入](plugin-deployment.zh-CN.md)。部署端通过 `/api/runtime-app/workspace` 调用原有业务处理函数，不挂载完整工程 API。
+第三方文档型卡片可用 `NodeDeploymentDefinition.from_document()` 直接复用原文档业务接口与 WorkspaceSection；含私有数据的卡片继续声明精细权限。无需单独编写 Workspace HTTP 接口。MatCreator 原有研究布局可以直接发布，未声明的其他自定义页面仍保持私有。发布面板会提前列出各页面的兼容性问题。详见[插件部署接入](plugin-deployment.md)。部署端通过 `/api/runtime-app/workspace` 调用原有业务处理函数，不挂载完整工程 API。
 
 ## 数据、凭证与执行边界
 

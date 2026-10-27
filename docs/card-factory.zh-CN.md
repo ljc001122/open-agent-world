@@ -1,7 +1,5 @@
 # 卡片工厂
 
-[English](card-factory.md)
-
 Card Factory 提供可视化卡片制作与打包。在 **Library → Packs** 开启工厂卡包，把工作台加入牌组后放到画布；也可分别放置并连接设备。
 
 ## 设计并打印
@@ -28,4 +26,4 @@ Card Factory 提供可视化卡片制作与打包。在 **Library → Packs** �
 
 ## 完整代码开发
 
-Pack Designer 的 **Developer tools → Pack IDE（Experimental）** 提供仍在开发的视觉源码编辑流程。传统工厂制作不因此变成实验性功能。需要自定义 Python/React 行为时使用[外部 SDK 开发指南](developers/index.zh-CN.md)。格式与安全限制见[配方参考](reference/factory-recipes.md)（英文）。
+Pack Designer 的 **Developer tools → Pack IDE（Experimental）** 提供仍在开发的视觉源码编辑流程。传统工厂制作不因此变成实验性功能。需要自定义 Python/React 行为时使用[外部 SDK 开发指南](developers/index.md)。格式与安全限制见[配方参考](reference/factory-recipes.md)（英文）。

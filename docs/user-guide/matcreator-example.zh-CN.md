@@ -1,7 +1,5 @@
 # 用 MatCreator 开始材料研究
 
-[English guide](../../plugins/matcreator/README.md)
-
 MatCreator 将研究 Agent、对话、计算环境、知识和产物组织在一个工作区。
 先从一个小任务开始：让它检查计算环境，生成一份结构文件，再核对结果。
 

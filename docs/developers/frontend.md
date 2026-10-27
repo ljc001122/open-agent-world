@@ -4,5 +4,3 @@ Add a React settings view to the same Python card and build it with the public S
 
 Continue with the [Greeter Card App tutorial](card-app.md#4-add-the-react-interface). It includes
 complete files, Windows and Linux/macOS commands, and the next build/install steps.
-
-[中文完整教程](card-app.zh-CN.md)

@@ -1,7 +1,5 @@
 # Contribute to and maintain OAW
 
-[简体中文](index.zh-CN.md)
-
 Use this path to change the host, maintain documentation, or operate a deployment.
 For an independent Card App, use the [developer guide](../developers/index.md).
 
@@ -39,7 +37,7 @@ change repository permissions. Release publication follows [the release procedur
 | Build or debug desktop | [Desktop](../desktop.md) |
 | Release the application | [Releasing](../releasing.md) |
 | Publish a locked workspace | [Deployment](../deployment.md) |
-| Run hosted profiles | [Hosting](hosting.zh-CN.md) |
+| Run hosted profiles | [Hosting](hosting.md) |
 | Change first-use guidance | [Tutorial maintenance](../tutorial.md) |
 | Change authentication/context | [Request boundaries](../enterprise-foundations.md), [security](../security.md) |
 | Change graph rendering | [Relationship maps](../graph-architecture.md), [canvas performance](../canvas-performance.md) |

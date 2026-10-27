@@ -1,8 +1,6 @@
 # 维护交互式教程
 
-[English](tutorial.md)
-
-欢迎页提供 **Start Tutorial（开始教程）**、**Choose a workspace（选择工作空间）**、**Start blank（从空白开始）**。用户操作说明见[第一个任务](user-guide/first-team.zh-CN.md)。画布教程还覆盖 Sandbox、粘合、Minister、Legion 和工作区布局；模型步骤可稍后完成，教程不会自动启动 Sandbox。
+欢迎页提供 **Start Tutorial（开始教程）**、**Choose a workspace（选择工作空间）**、**Start blank（从空白开始）**。用户操作说明见[第一个任务](user-guide/first-team.md)。画布教程还覆盖 Sandbox、粘合、Minister、Legion 和工作区布局；模型步骤可稍后完成，教程不会自动启动 Sandbox。
 
 ## 修改现有教程
 
@@ -18,4 +16,4 @@
 
 ## 卡片自带教程
 
-插件可定义[渐进式教程](developers/progressive-tutorials.zh-CN.md)，通过 **帮助 → 卡片教程与文档** 访问。文案应使用卡片实际 UI 名称。手动“继续”不表示宿主已观测或代为执行操作。
+插件可定义[渐进式教程](developers/progressive-tutorials.md)，通过 **帮助 → 卡片教程与文档** 访问。文案应使用卡片实际 UI 名称。手动“继续”不表示宿主已观测或代为执行操作。

@@ -1,14 +1,12 @@
 # 使用入门
 
-[English](index.md)
-
 先让一个 Agent 读取文档并给出建议。回复需要可用的模型连接；这次练习不需要 Sandbox，也不需要编程。
 
-1. [下载与安装](../install.zh-CN.md)。
-2. [连接模型](models.zh-CN.md)。
-3. [完成第一个任务](first-team.zh-CN.md)：放置 Agent、Text 和 Conversation，授予读取权限，再发送请求。
+1. [下载与安装](../install.md)。
+2. [连接模型](models.md)。
+3. [完成第一个任务](first-team.md)：放置 Agent、Text 和 Conversation，授予读取权限，再发送请求。
 
-之后再学习[卡片与连接](canvas.zh-CN.md)、[卡包与牌组](plugins.zh-CN.md)、[卡片工厂](../card-factory.zh-CN.md)。分享已经配置好的团队，可使用[内容卡包导出](../creator-packs.md)（英文）。
+之后再学习[卡片与连接](canvas.md)、[卡包与牌组](plugins.md)、[卡片工厂](../card-factory.md)。分享已经配置好的团队，可使用[内容卡包导出](../creator-packs.md)（英文）。
 
 **帮助（?）→ 教程** 可以重放画布交互教程。它还介绍 Sandbox、Minister 和 Legion 工作区；模型可稍后配置，Sandbox 可以保持停止。**帮助 → 卡片教程与文档** 提供已安装卡片自带的教程。**帮助 → 文档** 可离线阅读本手册。
 

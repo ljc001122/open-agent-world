@@ -1,7 +1,5 @@
 # Maintain the interactive tutorial
 
-[简体中文](tutorial.zh-CN.md)
-
 The welcome screen offers **Start Tutorial**, **Choose a workspace** and
 **Start blank**. User instructions live in [Your first team](user-guide/first-team.md).
 The guided canvas tutorial additionally covers Sandbox, glue, Minister and Legion

@@ -1,8 +1,6 @@
 # 第一个 Agent 与资源任务
 
-[English](first-team.md)
-
-目标是让 Agent 读取一份简短说明，在 Conversation 中回复。先[连接一个模型](models.zh-CN.md)；不需要启动 Sandbox。
+目标是让 Agent 读取一份简短说明，在 Conversation 中回复。先[连接一个模型](models.md)；不需要启动 Sandbox。
 
 ## 1. 进入画布
 
@@ -42,4 +40,4 @@
 
 修改并保存说明，再要求 Agent 调整议程。删除读取连接会撤销此连接提供的后续访问，但不会清除已读信息，也不会撤销已经完成的操作。
 
-接下来阅读[卡片与连接](canvas.zh-CN.md)或[卡包与牌组](plugins.zh-CN.md)。
+接下来阅读[卡片与连接](canvas.md)或[卡包与牌组](plugins.md)。

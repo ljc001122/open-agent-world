@@ -1,7 +1,5 @@
 # Build and install a Greeter Card App
 
-[简体中文](card-app.zh-CN.md)
-
 Build a card whose greeting can be edited by a person and used by a connected
 Agent. Start with the complete, tested [Python Greeter](../../examples/plugins/greeter/README.md),
 add a React editor, then install the same project as a `.oawpack`.

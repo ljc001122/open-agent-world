@@ -1,7 +1,5 @@
 # 构建并安装 Greeter Card App
 
-[English](card-app.md)
-
 做一张可以编辑问候语、供已连接 Agent 调用的卡片。从仓库中完整的 [Python Greeter](../../examples/plugins/greeter/README.md) 出发，添加 React 编辑界面，最后把同一个项目安装为 `.oawpack`。构建与直接工具测试不需要模型密钥或 Sandbox。
 
 ## 1. 准备可运行卡片

@@ -1,7 +1,5 @@
 # 安装 Open Agent World
 
-[English](https://github.com/theAfish/open-agent-world/blob/dev/docs/release-notes.md) | **简体中文**
-
 ## 下载
 
 展开发行页的 **Assets**，选择该发行版实际提供、适合你电脑的安装包：
@@ -18,7 +16,7 @@
 
 1. Windows：运行 `.exe`，从开始菜单打开 **Open Agent World**。Mac：打开 `.dmg`，把应用拖入 **Applications**，然后启动。
 2. 使用 **Connect AI（连接 AI）**，或在 **Settings → Models（设置 → 模型）** 添加连接并选择默认模型。
-3. 选择 **Start Tutorial（开始教程）**，或按照[第一个任务](https://github.com/theAfish/open-agent-world/blob/dev/docs/user-guide/first-team.zh-CN.md)操作。打开 **Pack & Card Library（卡包与卡牌库）** 收集、放置卡片。
+3. 选择 **Start Tutorial（开始教程）**，或按照[第一个任务](https://github.com/theAfish/open-agent-world/blob/dev/docs/user-guide/first-team.md)操作。打开 **Pack & Card Library（卡包与卡牌库）** 收集、放置卡片。
 
 安装包包含 Python 和应用依赖。调用模型需要配置服务；部分卡包和 Sandbox 环境首次使用时还需要下载依赖。
 
@@ -30,4 +28,4 @@
 
 链接文档跟随 **dev**。要确认某个正式版本的行为，请阅读对应 tag 的文档或该安装包内置帮助。
 
-[安装指南](https://github.com/theAfish/open-agent-world/blob/dev/docs/install.zh-CN.md)
+[安装指南](https://github.com/theAfish/open-agent-world/blob/dev/docs/install.md)
