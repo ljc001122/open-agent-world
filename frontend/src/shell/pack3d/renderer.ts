@@ -125,7 +125,10 @@ class PackRenderer {
   }
   private draw = (now: number) => {
     this.frame = 0; let animate = false, built = false, worked = false;
-    const started = performance.now(), slots = [...this.slots], start = this.cursor % Math.max(1, slots.length);
+    // A closing dialog retains its last bitmap for the fade. Do not let queued
+    // shader/render work delay the close timer after interaction is disabled.
+    const started = performance.now(), slots = [...this.slots].filter(slot => !slot.canvas.closest('[inert]'));
+    const start = this.cursor % Math.max(1, slots.length);
     // Prepare the uppermost unfinished visible row before lower rows. Already
     // displayed views keep round-robin service so hover/opening stays responsive.
     const waiting = slots.filter(slot => slot.visible && !slot.ready && slot.canvas.isConnected)
@@ -233,7 +236,10 @@ class PackRenderer {
     return {
       update: next => {
         const key = packModelKey(next), viewKey = packViewKey(next);
-        if (key === slot.key && viewKey === slot.viewKey) return;
+        if (key === slot.key && viewKey === slot.viewKey) {
+          if (slot.dirty) this.invalidate();
+          return;
+        }
         if (key !== slot.key) { slot.preparing = undefined; slot.prepared = undefined; slot.model?.dispose(); slot.model = undefined; slot.key = key; }
         if (next.revealing && !slot.options.revealing) slot.opening = performance.now();
         if (next.view.yaw !== slot.options.view.yaw || next.view.pitch !== slot.options.view.pitch) {
