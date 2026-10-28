@@ -228,6 +228,28 @@ test('renders when parallel shader compilation is unavailable', async ({ page })
   await expect(page.locator('[data-renderer="webgl"]')).toHaveCount(5);
 });
 
+test('pauses queued GPU work in an inert closing surface and resumes on reopen', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1350 });
+  await page.goto('/?pack-design');
+  await expect(page.locator('[data-renderer="webgl"]')).toHaveCount(5);
+  const canvas = page.locator('.pack-webgl').first();
+  const yaw = Number(await canvas.getAttribute('data-yaw'));
+  const before = (await stats(page)).renders;
+  // Closing can disable a surface after hover/rotation has queued a GPU frame.
+  await canvas.evaluate(element => {
+    const surface = element.closest<HTMLElement>('.library-pack')!;
+    surface.querySelector('button')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    surface.inert = true;
+  });
+  await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
+  expect((await stats(page)).renders).toBe(before);
+  expect(Number(await canvas.getAttribute('data-yaw'))).toBe(yaw);
+  await canvas.evaluate(element => { element.closest<HTMLElement>('.library-pack')!.inert = false; });
+  // An unchanged view update after reopening must resume its pending frame.
+  await page.getByRole('button', { name: '深色预览', exact: true }).click();
+  await expect(canvas).toHaveAttribute('data-yaw', (yaw + 15).toFixed(1));
+});
+
 test('skips unchanged views, restores cached frames and releases hidden GPU resources', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1350 });
   await page.goto('/?pack-design');
