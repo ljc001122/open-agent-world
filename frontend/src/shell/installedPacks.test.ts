@@ -26,11 +26,30 @@ it('does not synthesize an inventory pack for retained files from an uninstalled
     .map(item => item.pack.definition.id)).toEqual(['core', 'installed:local.tools']);
 });
 
+it('hides dismissed historical packs without deleting their saved metadata', () => {
+  const state = snapshot();
+  state.packs.local.definition.source = 'bundled';
+  state.packs.local.dismissed = true;
+  expect(packInventory(state, { restart_required: false, versions: [] }).map(item => item.pack.definition.id)).toEqual(['core']);
+  expect(state.packs.local.opened).toBe(true);
+});
+
 it('keeps selected packs without duplicating older retained versions', () => {
   const inventory = packInventory(snapshot(), { restart_required: true,
     versions: [version, { ...version, version: '2.0.0', selected: true }] });
   expect(inventory.map(item => item.pack.definition.id)).toEqual(['core', 'local']);
   expect(inventory[1].versions).toHaveLength(2);
+});
+
+it('joins archive versions and source dependency metadata by runtime owner', () => {
+  const inventory = packInventory(snapshot(), { restart_required: false,
+    versions: [{ ...version, id: 'publisher.tools', owner: 'local.tools', selected: true }],
+    inventory: [{ id: 'publisher.tools', owner: 'local.tools', name: 'Tools', version: '1.0.0',
+      source: 'installed', enabled: true, loaded: true, environments: [], backend_requirements: [], frontend_dependencies: [], warnings: [] }],
+  });
+  expect(inventory.map(item => item.pack.definition.id)).toEqual(['core', 'local']);
+  expect(inventory[1].versions[0].id).toBe('publisher.tools');
+  expect(inventory[1].inventory?.owner).toBe('local.tools');
 });
 
 it('does not mark a new installation waiting for restart as missing', () => {

@@ -11,8 +11,8 @@ import { causalFocus, executionIndex, layoutGraph, laneMemory, nodeEdges, trackP
 import './executionGraph.css';
 
 export function ExecutionGraphCard({ card }: { card: WorldCard }) {
-  const { deployed } = useWorkspaceAccess();
-  return <ExecutionGraphView api={useExecutionSources(card.id, deployed)} />;
+  const { deployed, permissions } = useWorkspaceAccess();
+  return <ExecutionGraphView api={useExecutionSources(card.id, deployed && !permissions[card.id]?.includes('execution_graph'))} />;
 }
 
 /** Publish a coherent revision only after all its pages arrive. */
@@ -310,10 +310,6 @@ export function ExecutionGraphView({ api }: { api?: ExecutionSourceHost }) {
 
   return <section className="execution-graph nodrag nopan nowheel" aria-label={t('Execution graph')} data-narrow={narrow}
     style={{ '--graph-label-x': labelX + 'px' } as CSSProperties}>
-    <header className="execution-graph-heading"><strong><GitBranch size={16} />{t('Project history')}</strong>
-      <span className="execution-phase" role="status" data-phase={value?.phase}>{['running', 'waiting'].includes(value?.phase ?? '') ? t(value!.phase) : ''}</span>
-    </header>
-    {value?.title && <p className="execution-project-title" title={value.title}>{value.title}</p>}
     {sources.length > 1 && <select className="execution-graph-source" aria-label={t('Execution source')} value={sources.some(item => item.id === source) ? source : ''} onChange={event => setSource(event.target.value)}>
       <option value="">{t('All connected agents')}</option>
       {sources.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -444,12 +440,6 @@ export function ExecutionGraphView({ api }: { api?: ExecutionSourceHost }) {
           </div>;
         })}
       </div>}
-      {!!graph.rows.length && <footer className="execution-graph-legend">
-        <span><i data-kind="actor" />{t('Agent color')}</span>
-        {graph.tracks.some(track => track.kind === 'workstream') && <span title={t('Same workstream, not a dependency')}><i data-kind="workstream" />{t('Workstream')}</span>}
-        {index.edges.length > 0 && <span><i />{t('Recorded relation')}</span>}
-        {!!graph.references.size && <span>↗ {t('Folded connection')}</span>}
-      </footer>}
     </div>
     {newCount > 0 && <button className="execution-new-activity" onClick={() => {
       pendingNavigation.current = graph.rows.at(-1)?.id; setSelected(graph.rows.at(-1)?.id); setNewCount(0);

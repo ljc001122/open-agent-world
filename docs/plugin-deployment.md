@@ -1,7 +1,5 @@
 # Plugin deployment
 
-**English** | [简体中文](plugin-deployment.zh-CN.md)
-
 Use this contract to expose an existing plugin view in a
 [published application](deployment.md). Backend-only plugins keep their nodes,
 connections, configuration, and runtime in the copied profile. A public custom
@@ -12,7 +10,42 @@ The editor and deployed application load the same `frontend.workspace` or
 An undeclared custom view fails publication. Its plugin can still operate as a
 hidden backend dependency.
 
-## Minimal integration
+## Document-backed cards (Plugin API 1.36)
+
+Implement the ordinary card once: `frontend.workspace` / `frontend.body`,
+`NodeDocumentDefinition`, and the existing `host.readDocument`,
+`host.documentAction`, and `host.documentDownloadUrl` calls. If its complete
+document, action responses and downloads are user-facing, add one declaration:
+
+```python
+deployment=NodeDeploymentDefinition.from_document()
+# Or: NodeDeploymentDefinition.from_document(read_only=True)
+```
+
+There is no second component, HTTP endpoint, or Workspace adapter. The publisher
+freezes the registered fields, actions and downloads into the release. Read-only
+mode selects only actions marked `read_only`; edit mode selects registered actions.
+The host's generic `replace` operation is not added. Search/detail actions retain
+their original response shapes, revision checks and persistence.
+
+This is an **explicit whole-document opt-in**, not automatic exposure of existing
+plugins. It includes full document summaries, projected action responses, nested
+data and exports; review those as public business content. Configuration, native
+resource actions, execution, state replacement, transformations and management
+APIs remain closed. For mixed public/private data, use the precise declaration
+below instead.
+
+The shorthand sets `shared_sections=True`: ordinary `WorkspaceSection` IDs can be
+composed without repeating permission declarations. All such sections share the
+card's business API; hiding a section changes presentation, not data access.
+Use explicit `sections` when different sections need different permissions.
+
+The administrator composes the existing cards into a Legion, saves its layout and
+opens **Publish application**. A read-only preflight lists all incompatible panes
+before creating a release. Publication checks the layout again; it does not alter
+the engineering profile or a running release.
+
+## Selective integration
 
 Import from `open_agent_world.plugin_api` and add the declaration to the existing
 `NodeTypeDefinition`:
@@ -56,12 +89,14 @@ plugin notes view, save text, and download it to verify the full path.
 
 | Declaration | Behavior |
 | --- | --- |
+| `document="read"` / `"edit"` | Opts into the whole existing document API; expands registered reads or all actions plus downloads at publication |
 | `config_fields` | Read-only configuration such as a heading; undeclared connection and credential fields are withheld |
 | `document_fields` / `summary_fields` | Only these top-level fields appear in reads and action responses |
 | `document_actions` | Allows registered business operations; generic document replacement is not automatically exposed |
 | `downloads` | Allows registered exporters, which must emit content suitable for public access |
 | `resource_actions={"query": {"rows"}}` | Calls the original resource handler and returns only declared top-level fields |
 | `execution=True` | Explicitly allows the node's existing execution status, start, and stop interfaces, including their requests and responses |
+| `file_preview=True` | Reuses `host.readFile` for a `core.file-viewer`; both the viewer and source must be published and connected by the existing preview grant |
 
 Collections default to empty and execution defaults to disabled. Projection is
 **top-level**: a selected nested object is exposed in full. Do not expose objects
@@ -76,6 +111,15 @@ In deployment mode, `host.listCards()` returns published nodes only; cross-node
 internals, document conversion, arbitrary file reads, and management APIs are outside
 this contract and unavailable on the server. Adapt older views to document/resource
 business actions; hiding settings buttons alone is insufficient.
+
+Agent Graph and Jobs use their existing connected-source APIs, selected-session
+checks and job controls. Publishing these views exposes the connected sources'
+business projections, not their configuration. Artifact collections provide list,
+preview and download access to referenced versions; retention administration,
+global artifact browsing and copying into another Sandbox remain private.
+File viewers follow only published Conversation / Sandbox sources; Sandbox reads
+are limited to the `workspace` root. The unchanged MatCreator research layout uses
+these host capabilities and the document shorthand for its knowledge graph.
 
 ## Existing workspace sections
 
@@ -105,10 +149,12 @@ Keep card-wide reads/actions separate from access intended for a private section
 
 1. Follow [plugin installation](plugins.md#package-structure-and-discovery), declare
    `requires_plugins`, install dependencies, and verify the original workspace in the editor.
-2. For source-checkout plugins with a frontend, retain `plugin.json` and `index.tsx`
-   under `plugins/<package>/frontend/` and run `npm --prefix frontend run build`.
-   A Python wheel alone does not install browser components. The builder also discovers
-   example frontends; their cards do not appear without the corresponding backend plugin.
+2. For distributed plugins with a frontend, build the Pack's UI independently and
+   include its compiled assets in a [`.oawpack`](pack-distribution.md). Install it
+   in the editor profile before publication; no host frontend rebuild is required.
+   A Python wheel alone does not install browser components. When developing the
+   OAW source checkout itself, `npm --prefix frontend run build` also prepares its
+   source-Pack frontends.
 3. Save the Legion layout, follow the [deployment procedure](deployment.md), and copy
    to a new directory. The copy contains data; distribute matching source, frontend
    build, Python dependencies, and external plugin resources as well.

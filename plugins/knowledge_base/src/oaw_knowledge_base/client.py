@@ -19,8 +19,8 @@ _clients: dict[str, object] = {}
 _lock = threading.Lock()
 
 INSTALL_HINT = (
-    "Knowledge base dependencies are missing. Run scripts/setup.ps1 (Windows) or "
-    "scripts/setup.sh, or install plugins/knowledge_base into the backend environment."
+    "Knowledge Base dependencies are not prepared. Restore or reinstall this Pack in Pack & Card Library, "
+    "then restart OAW. For a source checkout, run the project setup command to prepare its declared Pack dependencies."
 )
 
 
@@ -63,7 +63,7 @@ def _backfill_search_index(kb, engine):
         offset += len(batch)
 
 
-def _build(path, resolve_secret=None):
+def _build(path, resolve_secret=None, resolve_model=None):
     try:
         from mkb.sdk import KnowledgeBase
     except ImportError as error:  # pragma: no cover - depends on the deployment env
@@ -72,6 +72,8 @@ def _build(path, resolve_secret=None):
 
     from .experiment_store import ExperimentRecordStore
     from .graph_store import SqlGraphStore
+    from .insight_store import InsightStore
+    from .projection_store import ProjectionStore
     from .pipelines import register_pipelines
     from .search_store import ensure_schema as ensure_search_schema
 
@@ -89,10 +91,14 @@ def _build(path, resolve_secret=None):
     kb.initialize()
     kb.oaw_graph_store = graph_store
     kb.oaw_engine = engine
-    # Only a callable lives in memory; no secret enters the durable job database.
+    # Only callables live in memory; no secret or connection enters the durable
+    # job database — the conversion job resolves both when it actually runs.
     kb.oaw_resolve_secret = resolve_secret
+    kb.oaw_resolve_model = resolve_model
     ensure_search_schema(engine)
     kb.oaw_experiments = ExperimentRecordStore(engine)
+    kb.oaw_insights = InsightStore(engine)
+    kb.oaw_projections = ProjectionStore(engine)
     register_pipelines(kb)
     kb.jobs.recover_interrupted()
     _backfill_search_index(kb, engine)
@@ -108,16 +114,18 @@ def collection(kb, name=None):
     return kb.collections.create(name=wanted)
 
 
-def open_client(node_id, storage_path, *, resolve_secret=None):
+def open_client(node_id, storage_path, *, resolve_secret=None, resolve_model=None):
     path = database_path(storage_path)
     with _lock:
         cached = _clients.get(node_id)
         if cached is not None:
             if resolve_secret is not None:
                 cached.oaw_resolve_secret = resolve_secret
+            if resolve_model is not None:
+                cached.oaw_resolve_model = resolve_model
             return cached
     # Build outside the lock: initialize() touches the disk and can be slow.
-    kb = _build(path, resolve_secret)
+    kb = _build(path, resolve_secret, resolve_model)
     with _lock:
         cached = _clients.get(node_id)
         if cached is not None:

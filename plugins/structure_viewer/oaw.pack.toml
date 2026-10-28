@@ -1,0 +1,26 @@
+# Dependency intent only; installation and readiness are tracked separately.
+schema_version = 3
+
+[compatibility]
+plugin_api = "1.38"
+oaw = ">=0.1.0,<1"
+
+[distribution]
+id = "science.structure-viewer"
+name = "Structure Viewer"
+
+[[contributions.cards]]
+name = "Structure viewer"
+description = "Follow crystal and molecule files opened in connected windows."
+icon = "atom"
+color = "#67a69b"
+deck_id = "science"
+deck_name = "Science"
+size = [340, 240]
+frontend = { preview = "preview", body = "viewer", workspace = "viewer" }
+
+[components.frontend]
+entry = "frontend/index.tsx"
+project = "frontend/package.json"
+mode = "pack-build"
+

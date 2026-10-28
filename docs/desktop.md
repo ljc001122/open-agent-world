@@ -15,6 +15,12 @@ Download published installers from [GitHub Releases](https://github.com/theAfish
 
 On Windows, install the generated `Open Agent World_*_x64-setup.exe`, then open **Open Agent World** from the Start menu. The per-user NSIS installer does not require a developer environment. It includes a complete Python interpreter, locked backend dependencies, bundled plugins, frontend assets, and uv for managed Sandbox Python provisioning. Its WebView2 bootstrapper downloads the runtime if needed.
 
+Windows must have **Enable Win32 long paths** enabled before installation:
+bundled Python packages contain paths longer than 260 characters. The installer
+declares long-path support but does not change this system policy. Release CI
+checks the policy, installs into a directory containing spaces, compares every
+payload file with the build, and reruns the payload self-test after installation.
+
 The desktop shell shows startup progress, waits for backend readiness, and opens the world in a separate window. Opening the app again focuses its existing window. Closing the final window asks the backend to shut down; a Windows Job Object also owns the backend process tree for crash/forced-exit cleanup. Backend logs rotate at 5 MB. Formal launch logs use `%LOCALAPPDATA%\OpenAgentWorld.logs\launcher.log`, outside the relocatable data store; development and explicitly configured stores use `logs/launcher.log` inside their profile. The startup window reports the log path.
 
 Application installation and Sandbox provisioning remain separate. Scientific plugin dependencies and platform-specific execution prerequisites may still require a first-use download or OS configuration. macOS provides native Seatbelt isolation; Apple Silicon hosts on macOS 26+ can additionally install Apple Container for the preferred VM boundary. The release pipeline targets **Windows x64**, **macOS Apple Silicon**, and **macOS Intel**; macOS packages are previews. Build macOS packages on a Mac with `bash scripts/build-desktop.sh`.
@@ -33,14 +39,18 @@ Setup now also builds the frontend. After later frontend edits, run `npm --prefi
 ## Development and F3
 
 ```powershell
+./scripts/setup.ps1 -Profile default -SkipBuild
 ./scripts/dev.ps1
+./scripts/setup.ps1 -Profile tutorial -SkipBuild
 ./scripts/dev.ps1 -AgentRuntime mock -Profile tutorial
 ```
 
 Portable equivalents:
 
 ```bash
+bash scripts/setup.sh --profile default --skip-build
 bash scripts/dev.sh
+bash scripts/setup.sh --profile tutorial --skip-build
 bash scripts/dev.sh --agent-runtime core.mock --profile tutorial
 ```
 
@@ -105,7 +115,7 @@ desktop/src-tauri/target/release/bundle/nsis/
 
 The payload starts with the interpreter and standard library from the build machine, excluding its global site-packages. Backend packages are installed from `backend/uv.lock` with wheel hashes enforced. The payload self-test imports Google ADK/LiteLLM, discovers the bundled plugins, and creates a separate Sandbox Python environment. The backend remains ordinary Python so plugin discovery, file-based WSL helpers, and `sys.base_prefix` continue to work after installation.
 
-The build retains previous payloads under `.open-agent-world/desktop-previous-*` until manually removed. `-SkipFrontend` and `-SkipPayload` are available when rebuilding only the desktop shell; use them only when those inputs have not changed. The initial package is unsigned; no certificate, publishing destination, or automatic update service is configured.
+The build retains previous payloads under `.open-agent-world/desktop-previous-*` until manually removed. `-SkipFrontend` and `-SkipPayload` are available when rebuilding only the desktop shell; use them only when those inputs have not changed. Signing and updater availability depend on the build configuration. See [Releasing](releasing.md) for the optional signing and publication inputs.
 
 `scripts/package-backend.py --cache-dir <uv-cache>` can reuse an existing download
 cache while still enforcing the locked wheel hashes. See [Store acceptance](pack-store.md#acceptance)

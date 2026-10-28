@@ -2,10 +2,10 @@
 
 The pipeline itself is covered by ``plugins/knowledge_base/tests``, which runs with
 no host at all. What is left for the backend to prove is the seam: that the loader
-registers the card, that the three human-only operations stay unreachable by agents,
+registers the card, that human-only operations stay unreachable by agents,
 that a ``KnowledgeError`` out of a handler becomes a ``ResourceValidationError``
 without any adapter in between, that create/delete own the storage directory, and
-that the ``Knowledge research`` formation deploys — and copies — a working card.
+that the ``Lab Manager`` formation deploys — and copies — a working card.
 """
 import base64
 import json
@@ -32,13 +32,27 @@ from backend.services import create_services  # noqa: E402
 from backend.tests.conftest import create_node  # noqa: E402
 from backend.world.models import CardCreate  # noqa: E402
 from oaw_knowledge_base.errors import KnowledgeError  # noqa: E402
-from oaw_knowledge_base.operations import BY_NAME, EXTRACT_ACTIONS, OPERATIONS, READ_ACTIONS  # noqa: E402
+from oaw_knowledge_base.operations import BY_NAME, EXPERIMENT_ACTIONS, EXTRACT_ACTIONS, OPERATIONS, READ_ACTIONS, RESEARCH_ACTIONS  # noqa: E402
+from oaw_knowledge_base import artifact_import  # noqa: E402
 
 NODE_TYPE = "knowledge.base"
-# Uploading a file, converting it, managing groups, changing settings, approving a
-# draft and choosing which schema builds the graph are acts a person takes on the
-# canvas. They must never gain a capability kind, on any transport.
-DESKTOP_ONLY = {"ingest", "process", "groups", "settings", "review", "graph_schema"}
+# Raw upload bodies, broad management actions and publication remain desktop-only.
+# Research agents use reference-based imports and separate bounded preparation tools.
+DESKTOP_ONLY = {"project_import_preview", "settings",
+                "experiment_ingest", "experiment_bundle_manage", "experiment_review", "insight_review"}
+
+
+def test_declared_local_pdf_engine_converts_a_real_document():
+    """Fresh CI installs must provide the actual PDF engine, not a placeholder wheel."""
+    import pymupdf
+    from oaw_knowledge_base.markdown import to_markdown
+
+    with pymupdf.open() as document:
+        document.new_page().insert_text((50, 50), "OAW PDF acceptance")
+        data = document.tobytes()
+    text, engine, _ = to_markdown(data, "acceptance.pdf", "application/pdf", engine="pymupdf4llm")
+    assert engine == "pymupdf4llm"
+    assert "OAW PDF acceptance" in text
 
 
 @pytest.fixture
@@ -58,7 +72,7 @@ def test_the_loader_registers_the_card_and_its_grants():
     definition = registry.node_type(NODE_TYPE)
     assert definition.frontend["workspace"] == "workspace"
     assert definition.deletion_warning  # deleting a card destroys knowledge; warn first
-    assert set(definition.resource_actions) == {operation.name for operation in OPERATIONS}
+    assert set(definition.resource_actions) == {operation.name for operation in OPERATIONS} | {artifact_import.ACTION}
 
     for name, resource_action in definition.resource_actions.items():
         if name in DESKTOP_ONLY:
@@ -69,10 +83,20 @@ def test_the_loader_registers_the_card_and_its_grants():
 
     read = {grant.kind for grant in registry.relationship(f"{NODE_TYPE}.read").capabilities}
     extract = {grant.kind for grant in registry.relationship(f"{NODE_TYPE}.extract").capabilities}
+    experiment = {grant.kind for grant in registry.relationship(f"{NODE_TYPE}.experiment").capabilities}
+    research = {grant.kind for grant in registry.relationship(f"{NODE_TYPE}.research").capabilities}
     assert read == {f"{NODE_TYPE}.{name}" for name in READ_ACTIONS}
     assert extract == {f"{NODE_TYPE}.{name}" for name in EXTRACT_ACTIONS}
-    assert read < extract  # extract is read plus the write half, never less
-    assert not {kind for kind in extract if kind.rsplit(".", 1)[-1] in DESKTOP_ONLY}
+    assert experiment == {f"{NODE_TYPE}.{name}" for name in EXPERIMENT_ACTIONS}
+    assert research == {f"{NODE_TYPE}.{name}" for name in RESEARCH_ACTIONS} | {artifact_import.KIND}
+    assert read < extract and read < experiment  # each is read plus its own write half
+    # The two write halves are separate pipelines: a Space extractor cannot save
+    # experiment records and an experiment-only assistant cannot revise projections.
+    assert not (extract - read) & (experiment - read)
+    assert extract < research and experiment < research
+    assert not {kind for kind in research if kind.rsplit(".", 1)[-1] in DESKTOP_ONLY}
+    assert all(registry.capability_definition(kind).read_only for kind in read)
+    assert not any(registry.capability_definition(kind).read_only for kind in research - read)
 
 
 @pytest.mark.asyncio
@@ -92,8 +116,8 @@ async def test_an_mkb_refusal_does_not_reach_the_browser_as_a_crash(services):
     # MKB's exceptions are not ValueErrors, so without the plugin's guard asking for a
     # well-formed id that does not exist would leave the handler as a 500.
     with pytest.raises(ResourceValidationError) as failure:
-        await action(services, node.id, "projections",
-                     projection_id="00000000-0000-0000-0000-000000000000")
+        await invoke_resource_action(services, node.id, "schemas", ResourceActionRequest(arguments={
+            "operation": "get", "schema_id": "00000000-0000-0000-0000-000000000000"}))
     assert "not found" in str(failure.value).lower()
 
 
@@ -103,9 +127,11 @@ async def test_create_and_delete_own_the_storage_directory(services):
     storage = services.resources.node_storage_path(node.id)
     assert (storage / "knowledge.db").exists()  # created eagerly, not on first action
 
-    await action(services, node.id, "ingest", filename="note.md",
-                 content_base64=base64.b64encode(b"# Note\n\ntext").decode(),
-                 media_type="text/markdown")
+    preview = await action(services, node.id, "project_import_preview", files=[{
+        "filename": "note.md", "content_base64": base64.b64encode(b"# Note\n\ntext").decode(),
+        "media_type": "text/markdown"}], grouping="single")
+    await action(services, node.id, "project_import_commit", token=preview["token"],
+                 grouping="single", auto_process=False)
     await services.delete_card(node.id)
     assert not storage.exists()
 
@@ -117,10 +143,8 @@ def test_the_card_survives_a_restart(data_root):
         node = create_node(client, NODE_TYPE)
         url = f"/api/nodes/{node['id']}/resource/"
         assert client.post(url + "settings", json={"arguments": {"collection_name": "Alloys"}}).status_code == 200
-        upload = client.post(url + "ingest", json={"arguments": {
-            "filename": "note.md", "media_type": "text/markdown",
-            "content_base64": base64.b64encode(b"# Note\n\nSome text.").decode()}})
-        assert upload.status_code == 200, upload.text
+        imported = import_document(client, node["id"])
+        project_id = imported["projects"][0]["id"]
 
     with TestClient(create_app(settings)) as client:
         assert client.get(f"/api/nodes/{node['id']}").json()["status"] == "available"
@@ -128,6 +152,8 @@ def test_the_card_survives_a_restart(data_root):
         assert overview.status_code == 200, overview.text
         assert overview.json()["collection"]["name"] == "Alloys"
         assert overview.json()["counts"]["sources"] == 1
+        assert overview.json()["counts"]["projects"] == 1
+        assert resource(client, node["id"], "projects", project_id=project_id)["project"]["files"][0]["filename"] == "note.md"
         # A bad argument is a 422 with the plugin's own message, not a 500.
         bad = client.post(url + "markdown", json={"arguments": {"source_id": "nope"}})
         assert bad.status_code == 422, bad.text
@@ -142,6 +168,14 @@ def resource(client, node_id, operation, **arguments):
                            json={"arguments": arguments})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def import_document(client, node_id):
+    preview = resource(client, node_id, "project_import_preview", grouping="single", files=[{
+        "filename": "note.md", "media_type": "text/markdown",
+        "content_base64": base64.b64encode(b"# Note\n\nSome text.").decode()}])
+    return resource(client, node_id, "project_import_commit", token=preview["token"],
+                    grouping="single", auto_process=False)
 
 
 def test_mineru_secret_is_encrypted_survives_restart_and_is_scoped(data_root, monkeypatch):
@@ -240,32 +274,33 @@ def test_the_research_formation_deploys_wired_independent_bases(client):
     nodes = {node["id"]: node for node in first["nodes"]}
     assert all(nodes[a[key]]["parent_id"] == a["group"] for key in a if key != "group")
     assert nodes[a["knowledge"]]["type"] == NODE_TYPE
-    assert "knowledge_graph" in nodes[a["agent"]]["config"]["system_instruction"]
-    # The person drives the pipeline from the workspace; the Librarian only reads.
+    instruction = nodes[a["agent"]]["config"]["system_instruction"]
+    assert "knowledge_projection_save" in instruction and "knowledge_experiment_save" in instruction
+    assert "knowledge_insight_save" in instruction and "INSIGHT EXTRACTION REQUEST" in instruction
+    # The assistant prepares both workflows from conversation; publication remains human-only.
     assert {(edge["source"], edge["target"], edge["relationship"]) for edge in first["edges"]} == {
         (a["agent"], a["conversation"], "participate"),
-        (a["agent"], a["knowledge"], f"{NODE_TYPE}.read")}
+        (a["agent"], a["knowledge"], f"{NODE_TYPE}.research")}
 
     provider = WorldAgentCapabilityProvider(client.app.state.services)
     tools = {tool.name for tool in client.portal.call(provider.list_tools, a["agent"])}
-    expected_tool_names = {BY_NAME[name].tool_name for name in READ_ACTIONS}
-    assert expected_tool_names <= tools
-    # Extraction is a button, not a tool: nothing the Librarian holds can write.
-    assert not tools & {"knowledge_projection_prompt", "knowledge_save_projection",
-                        "knowledge_draft", "knowledge_ingest", "knowledge_review"}
+    assert {BY_NAME[name].tool_name for name in RESEARCH_ACTIONS} | {artifact_import.TOOL_NAME} <= tools
+    # Raw file bodies and every publication stay out of the model's tools.
+    assert not tools & {"knowledge_ingest",
+                        "knowledge_review", "knowledge_experiment_review", "knowledge_experiment_ingest",
+                        "knowledge_insight_review"}
 
     layout = json.dumps(nodes[a["group"]]["config"]["workspace_layout"])
     assert all(a[key] in layout for key in ("conversation", "knowledge"))
     assert all(section in layout for section in ("sessions", "conversation"))
     # The knowledge card is placed whole (no section_id): its own frontend renders
-    # the Literature/Experiment rail and each workflow's tabs itself, so no
-    # individual section (sources, markdown, graph, review, ...) needs its own
+    # the Projects/Spaces/Results and experiment workflow tabs itself, so no
+    # individual section needs its own
     # place in the generic layout to be reachable.
     assert '"card_id": "' + a["knowledge"] + '"}' in layout
 
     # Each deployment owns its database: a document in one is invisible in the other.
-    resource(client, a["knowledge"], "ingest", filename="note.md", media_type="text/markdown",
-             content_base64=base64.b64encode(b"# Note\n\nSome text.").decode())
+    import_document(client, a["knowledge"])
     assert resource(client, a["knowledge"], "overview")["counts"]["sources"] == 1
     assert resource(client, b["knowledge"], "overview")["counts"]["sources"] == 0
 
@@ -274,8 +309,7 @@ def test_a_saved_knowledge_legion_deploys_an_empty_working_base(client):
     deployed = client.post(f"/api/legions/presets/{PRESET}/instances", json={}).json()
     keys = deployed["node_ids"]
     resource(client, keys["knowledge"], "settings", collection_name="Alloys")
-    resource(client, keys["knowledge"], "ingest", filename="note.md", media_type="text/markdown",
-             content_base64=base64.b64encode(b"# Note\n\nSome text.").decode())
+    import_document(client, keys["knowledge"])
 
     saved = client.post("/api/legions", json={"name": "Alloy research",
                                               "node_ids": list(keys.values())})
@@ -291,7 +325,7 @@ def test_a_saved_knowledge_legion_deploys_an_empty_working_base(client):
     overview = resource(client, copied["id"], "overview")
     assert overview["counts"]["sources"] == 0
     assert overview["settings"] == {"collection_name": "Knowledge base",
-                                    "pdf_engine": "auto", "mineru_base_url": ""}
+                                    "pdf_engine": "auto", "mineru_base_url": "", "vision_model": "", "embedding_model": ""}
     assert resource(client, keys["knowledge"], "overview")["counts"]["sources"] == 1
 
     group = next(node for node in copy.json()["nodes"] if node["type"] == "legion")
@@ -310,8 +344,7 @@ def test_the_research_formation_publishes_and_serves_as_a_deployment(data_root):
                     client=("127.0.0.1", 50000)) as engineering:
         deployed = engineering.post(f"/api/legions/presets/{PRESET}/instances", json={}).json()
         keys = deployed["node_ids"]
-        resource(engineering, keys["knowledge"], "ingest", filename="note.md", media_type="text/markdown",
-                content_base64=base64.b64encode(b"# Note\n\nSome text.").decode())
+        import_document(engineering, keys["knowledge"])
         release = engineering.post("/api/deployments",
                                    json={"legion_id": keys["group"], "name": "Knowledge demo"})
         assert release.status_code == 201, release.text
@@ -320,22 +353,18 @@ def test_the_research_formation_publishes_and_serves_as_a_deployment(data_root):
     runtime_root = data_root.with_name(data_root.name + "-runtime")
     create_deployment(data_root, runtime_root, release_id, password="a-fine-long-password")
     manifest = json.loads((runtime_root / "deployment.json").read_text("utf-8"))
-    # Section names match the card's own WorkspaceSection ids: Sources absorbs
-    # search, markdown and the single-document projection convenience; Graph
-    # absorbs the graph-schema pipeline (project, draft, review, publish) that used
-    # to be split across three separate tabs.
+    # Section names match the card's project/Space workspace and experiment views.
     assert set(manifest["permissions"][keys["knowledge"]]) == {
-        "settings", "sources", "schemas", "projections", "experiments", "graph"}
+        "settings", "projects", "spaces", "results", "schemas", "experiments", "insights"}
     access = manifest["plugin_access"][keys["knowledge"]]
     # Settings never appears among the granted resource actions, so a business
     # release can never rewrite the collection name, PDF engine or MinerU URL,
     # regardless of whether its pane stays visible in the published layout.
     assert "settings" not in access["resource_actions"]
     assert access["config_fields"] == ["default_model"]
-    # Search, markdown and choosing the graph schema are still real, callable
-    # resource actions — just grouped under the sections above, not section names
-    # of their own.
-    assert {"search", "markdown", "graph_schema"} <= set(access["resource_actions"])
+    # Optional review/revision is exposed without a mandatory review stage.
+    assert {"search", "markdown", "projection_review_prompt", "projection_revise"} <= set(access["resource_actions"])
+    assert "knowledge_draft_manage" not in access["resource_actions"]
 
     with TestClient(create_app(ConfigSettings.for_data_root(runtime_root)),
                     client=("127.0.0.1", 50000)) as deployed_client:

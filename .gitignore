@@ -7,6 +7,8 @@ __pycache__/
 .venv/
 
 # Frontend
+node_modules/
+dist/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
@@ -23,6 +25,7 @@ desktop/src-tauri/gen/
 .env.*
 !.env.example
 .open-agent-world/
+.oaw-hosting/
 data/
 logs/
 .outputs/

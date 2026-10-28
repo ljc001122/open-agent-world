@@ -144,7 +144,9 @@ const WorldCardNodeComponent = memo(function WorldCardNodeComponent({ data, sele
 
   const support = nodeSurfaceSupport(card.type, catalog);
   const presentation = cardPresentation(card, catalog);
-  const customFace = Boolean(cardStudio(card, catalog)) && !isMissingCard(card, catalog);
+  const authoredSlot = level === 'node' ? 'preview' : level === 'inspector' ? 'body' : level;
+  const authoredFace = definition?.authoring && definition.frontend?.[authoredSlot] === 'oaw.authoring-card';
+  const customFace = Boolean(cardStudio(card, catalog)) && (!definition?.authoring || authoredFace) && !isMissingCard(card, catalog);
   const contentSurface = !customFace && !isMissingCard(card, catalog) && hasContentSurface(definition)
     && (visualLevel === 'inspector' || visualLevel === 'workspace');
   const base = useNodeSurfaceStore(state => state.baseLevels[card.id]);
@@ -236,15 +238,17 @@ const WorldCardNodeComponent = memo(function WorldCardNodeComponent({ data, sele
       )) : null}
 
       {visualLevel !== "inspector" && <EquipmentToggle card={card} />}
-      {customFace ? <DesignedCard card={card} level={level} /> : visualLevel === "workspace" ? <WorkspaceSurface card={card} /> : <>
+      {customFace ? authoredFace ? <PluginSurface card={card} level={level} slot={authoredSlot} /> : <DesignedCard card={card} level={level} /> : visualLevel === "workspace" ? <WorkspaceSurface card={card} /> : <>
         {contentSurface ? <ContentSurfaceControls card={card} level="inspector" /> : <header className={`card-header node-surface-header node-drag-region ${visualLevel === "inspector" ? "card-finish-surface" : ""}`}>
-          <div className="card-kind-icon" data-material-layer="top-print" aria-hidden="true"><CatalogIcon definition={definition} size={18} /></div>
+          {visualLevel !== "preview" && <div className="card-kind-icon" data-material-layer="top-print" aria-hidden="true"><CatalogIcon definition={definition} size={18} /></div>}
           <div className="card-title-group" data-material-layer="top-print">
-            <span className="card-eyebrow">{isMissingCard(card, catalog) ? `MISSING · ${card.type}` : label}</span>
+            {visualLevel !== "preview" && <span className="card-eyebrow">{isMissingCard(card, catalog) ? `MISSING · ${card.type}` : label}</span>}
             <CardName key={`${card.id}:${visualLevel}`} card={card} label={label} editable={visualLevel !== "node"} />
           </div>
-          <div className="card-status" data-material-layer="top-print" data-status={displayStatus} title={`${t('Status')}: ${t(statusLabel(displayStatus))}`}>
-            <span aria-hidden="true" /><span>{t(statusLabel(displayStatus))}</span>
+          <div className={visualLevel === "preview" ? "card-status-emblem" : "card-status"} data-material-layer="top-print" data-status={displayStatus}
+            role={visualLevel === "preview" ? "img" : undefined} aria-label={visualLevel === "preview" ? `${label} · ${t('Status')}: ${t(statusLabel(displayStatus))}` : undefined}
+            title={`${label} · ${t('Status')}: ${t(statusLabel(displayStatus))}`}>
+            {visualLevel === "preview" ? <CatalogIcon definition={definition} size={16} /> : <><span aria-hidden="true" /><span>{t(statusLabel(displayStatus))}</span></>}
           </div>
           {(visualLevel === "node" || visualLevel === "preview") && support.node && support.preview ? (
             <IconButton

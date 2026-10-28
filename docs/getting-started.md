@@ -1,14 +1,12 @@
 # Getting started
 
-**English** | [简体中文](getting-started.zh-CN.md)
-
 [Documentation](README.md) / [Configuration](configuration.md)
 
 ## Requirements and installation
 
 Run all commands from the repository root after cloning it.
 
-- Python 3.11 or newer, uv, and Node.js 24 or newer.
+- Python 3.11 or newer, uv, and Node.js 22 or newer.
 - Windows 10/11, Linux (including WSL2), or macOS 13+ for local Sandbox execution.
 - macOS uses built-in Seatbelt; macOS 26+ on Apple Silicon can install Apple Container 0.6.0+ for the preferred VM runtime.
 
@@ -26,7 +24,7 @@ bash scripts/setup.sh
 bash scripts/start.sh
 ```
 
-Setup installs the backend development dependencies, Google ADK and LiteLLM adapters, frontend dependencies, and builds the production frontend. `start` serves that build from the Python backend and opens the local application URL. Ctrl+C stops the launcher. Rebuild after frontend changes with `npm --prefix frontend run build`.
+Setup installs Core, backend development tools and frontend dependencies, then builds the Core frontend. It next prepares bundled Packs and Google ADK/LiteLLM independently: a failed optional component does not prevent Core or other Packs from being prepared. Existing compatible dependencies and environments are reused. Use `-CoreOnly` (PowerShell) or `--core-only` for minimal setup; use the application's Library/Store for subsequent plugin installation and repair. `start` serves the prepared build from the Python backend and opens the local application URL. Ctrl+C stops the launcher. Rebuild after frontend changes with `npm --prefix frontend run build`.
 
 The shell launcher uses the installed backend environment; Node.js and uv are only needed for setup and rebuilds. It accepts launcher options, for example `bash scripts/start.sh --mode preview --profile demo` or `bash scripts/start.sh --port 38474`. On a machine without a graphical browser, open the printed local URL manually on that machine. In WSL2, install the prerequisites and run both scripts inside the Linux distribution.
 
@@ -45,12 +43,14 @@ Application setup and Sandbox provisioning are separate. Placing a card does not
 For deterministic local debugging, use the mock runtime:
 
 ```powershell
+./scripts/setup.ps1 -Profile default -SkipBuild
 ./scripts/dev.ps1 -AgentRuntime mock
 ```
 
 Or with the portable launcher:
 
 ```bash
+bash scripts/setup.sh --profile default --skip-build
 bash scripts/dev.sh --agent-runtime core.mock
 ```
 
@@ -58,12 +58,12 @@ The mock runtime is a debugging substitute, not a language model. Real Agent res
 
 ## Startup and troubleshooting
 
-- Missing dependencies: run setup before launching. The portable launcher checks for the backend virtual environment, Vite, and Node.
+- Missing or stale dependencies: run setup for the selected profile before launching. Dev checks the persistent Python environment, source plugins, prepared Pack environments, and frontend dependencies. It never installs packages. Setup and dev both accept Node 22+; Node 22 displays a compatibility notice because `matterviz` declares Node 24+. Run setup again after dependency changes or when creating a new profile; normal source edits only require dev's rebuild/hot reload.
 - Model authentication or routing failures: check the connection's enabled state, credential source, endpoint, and exact model ID in [Configuration](configuration.md).
 - Empty tray: collect cards and select deck contents in [Card Library](card-library.md).
 - Unavailable Sandbox: inspect its runtime diagnostics, install the reported prerequisites, and refresh discovery. OAW does not substitute unisolated execution.
 - `dev` always uses `.open-agent-world/development/profiles/default`, independently of the formal user directory and `OPEN_AGENT_WORLD_DATA_ROOT`. Use `-Profile tutorial` / `--profile tutorial` for another development profile. F3 provides selective resets with backups.
-- Windows `scripts/dev.ps1` waits for backend readiness without a fixed deadline and reports progress. Use `-StartupTimeoutSeconds 300` for an explicit deadline. The portable launcher also waits for readiness or backend exit.
+- Dev waits for backend readiness without a fixed deadline and reports progress. Use `-StartupTimeoutSeconds 300` on Windows or `--startup-timeout-seconds 300` with the portable launcher for an explicit deadline.
 
 ## Development and verification
 

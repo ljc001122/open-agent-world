@@ -33,7 +33,7 @@ from backend.plugins.deployment import NodeDeploymentDefinition
 from backend.plugins.containers import NodeContainerDefinition
 from backend.plugins.execution import NodeExecutionDefinition
 
-PLUGIN_API_VERSION = "1.33"
+PLUGIN_API_VERSION = "1.40"
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9]*(?:[._:/-][a-z0-9]+)*$")
 _API_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
@@ -59,8 +59,18 @@ class PluginDescriptor(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=500)
     python_requirements: tuple[str, ...] = ()
+    sandbox_environments: tuple[str, ...] = Field(default=(), max_length=20,
+        description="Own declared Sandbox environments used by this Pack's runtime providers.")
     requires_plugins: tuple[str, ...] = ()
     state: PluginStateSpec | None = None
+
+    @model_validator(mode="after")
+    def validate_sandbox_environments(self) -> Self:
+        if len(set(self.sandbox_environments)) != len(self.sandbox_environments) or any(
+            not _IDENTIFIER.fullmatch(value) for value in self.sandbox_environments
+        ):
+            raise ValueError("Sandbox environment references must be unique identifiers")
+        return self
 
 
 class PackDefinition(BaseModel):
@@ -189,6 +199,7 @@ class NodeTypeCatalogItem(BaseModel):
     icon_url: str | None = None
     card_face: CardFaceCatalog | None = None
     frontend: dict[str, str] = Field(default_factory=dict)
+    authoring: dict[str, Any] | None = None
     color: str
     deck_id: str
     deck_label: str
@@ -239,6 +250,7 @@ class PluginCatalog(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     plugins: list[PluginDescriptor]
+    enabled_plugin_ids: list[str] = Field(default_factory=list)
     node_types: list[NodeTypeCatalogItem]
     relationships: list[RelationshipCatalogItem]
     packs: list[PackCatalogItem] = Field(default_factory=list)
@@ -350,6 +362,7 @@ class NodeTypeDefinition:
     card_face: CardFaceSpec | Mapping[str, str] | None = None
     tutorials: Tutorials = ()
     default_equipment: tuple[DefaultEquipment, ...] = ()
+    authoring: Mapping[str, Any] | None = None
 
     def resolved_presentation(self) -> NodePresentation:
         if self.presentation is not None:
@@ -360,6 +373,10 @@ class NodeTypeDefinition:
         default_config = self.config_model().model_dump(mode="json")
         presentation = self.resolved_presentation()
         face = CardFaceSpec.model_validate(self.card_face) if self.card_face is not None else None
+        authoring = None
+        if self.authoring is not None:
+            from backend.packs.interfaces import CardInterface
+            authoring = CardInterface.model_validate(self.authoring).model_dump(mode="json")
         return NodeTypeCatalogItem(
             tutorials=validate_tutorials(self.tutorials),
             id=self.id,
@@ -371,6 +388,7 @@ class NodeTypeDefinition:
             card_face=CardFaceCatalog(variant=face.variant, tone=face.tone,
                 image_url=f"/api/plugins/{plugin_id}/assets/{face.image_asset}" if face.image_asset else None) if face else None,
             frontend=dict(self.frontend),
+            authoring=authoring,
             color=self.color,
             deck_id=self.deck_id,
             deck_label=self.deck_label,
@@ -544,9 +562,14 @@ class PluginRegistry:
     """Authoritative registry of installed plugins and their owned contributions."""
 
     def __init__(self) -> None:
+        # Startup diagnostics carry no executable contributions or permissions.
+        self.load_failures: list[dict[str, Any]] = []
         self.runtime_requirements: dict[str, tuple[str, ...]] = {}
         self.installed_packs: dict[str, Any] = {}
         self.frontend_modules: dict[str, dict[str, Any]] = {}
+        self.pack_specs: dict[str, Any] = {}
+        self.pack_roots: dict[str, Any] = {}
+        self.pack_sources: dict[str, str] = {}
         self._plugins: dict[str, PluginDescriptor] = {}
         self._nodes: dict[str, NodeTypeDefinition] = {}
         self._relationships: dict[str, RelationshipDefinition] = {}
@@ -563,7 +586,7 @@ class PluginRegistry:
         self._legion_presets: dict[str, LegionPresetDefinition | LegionBlueprintPreset] = {}
         self._disabled: set[str] = set()
 
-    def install(self, plugin: Plugin, *, distribution=None) -> None:
+    def install(self, plugin: Plugin, *, distribution=None, source_spec=None) -> None:
         descriptor = getattr(plugin, "descriptor", None)
         if not isinstance(descriptor, PluginDescriptor):
             raise TypeError("plugin descriptor must be a PluginDescriptor")
@@ -577,7 +600,7 @@ class PluginRegistry:
             raise ValueError(f"plugin {descriptor.id!r} is already installed")
         for dependency in descriptor.requires_plugins:
             self.validate_identifier(dependency, "plugin dependency")
-            if not self.has_plugin(dependency):
+            if not self.is_enabled(dependency):
                 raise PluginCompatibilityError(
                     f"plugin {descriptor.id!r} requires plugin {dependency!r} to be installed first"
                 )
@@ -586,13 +609,22 @@ class PluginRegistry:
             raise TypeError(f"plugin {descriptor.id!r} must define register(registration)")
 
         staged = PluginRegistration(descriptor)
+        if source_spec is not None and source_spec.entrypoints and source_spec.contributions.cards:
+            from backend.plugins.declarative import contribute_cards
+            contribute_cards(staged, source_spec)
         register(staged)
+        if source_spec is not None and source_spec.designs:
+            from backend.packs.interfaces import apply_interfaces
+            apply_interfaces(staged, source_spec)
+        declaration = distribution if distribution is not None else source_spec
+        declared_nodes = getattr(declaration, "node_types", None)
+        if declared_nodes is not None and set(staged.nodes) != set(declared_nodes):
+            raise ValueError("Plugin must register exactly its declared owned node types")
         if distribution is not None:
-            if set(staged.packs) != {distribution.id}:
-                raise ValueError("An external Pack must register exactly one Pack with its distribution ID")
-            if any(not key.startswith(distribution.id + ".") for key in staged.nodes):
+            if declared_nodes is None and any(not key.startswith(distribution.owner_id + ".") and not (
+                    distribution.kind == 'plugin' and key == distribution.owner_id) for key in staged.nodes):
                 raise ValueError("External card IDs must belong to the Pack namespace")
-            if any(card not in staged.nodes for card in staged.packs[distribution.id].cards):
+            if distribution.kind == 'content' and any(card not in staged.nodes for pack in staged.packs.values() for card in pack.cards):
                 raise ValueError("An external Pack may include only its own cards")
         for key, node in tuple(staged.nodes.items()):
             policy = node.state if node.state is not None else descriptor.state
@@ -606,16 +638,24 @@ class PluginRegistry:
                 id=f"{descriptor.id}.default", name=descriptor.name or descriptor.id,
                 description=descriptor.description or "", cards=tuple(staged.nodes),
             ))
+        if source_spec is not None and source_spec.packs and set(staged.packs) != set(source_spec.packs):
+            raise ValueError("Plugin must register exactly its declared provided Pack IDs")
+        if distribution is not None and set(staged.packs) != set(distribution.provided_pack_ids):
+            raise ValueError("A content Pack must register exactly one Pack with its distribution ID" if distribution.kind == 'content'
+                else "An external Pack must register exactly its declared provided Pack IDs")
         self._normalize_capabilities(staged)
         self._validate_registration(staged)
 
-        self._plugins[descriptor.id] = descriptor
-        self._commit_owned("legion_preset", descriptor.id, self._legion_presets, staged.legion_presets)
-        self._commit_owned("pack", descriptor.id, self._packs, {
+        # Construct all fallible metadata before publishing any contribution.
+        packs = {
             key: PackCatalogItem(**pack.model_dump(), plugin_id=descriptor.id, source="installed" if distribution else "bundled",
                 artwork_url=f"/api/plugins/{descriptor.id}/assets/{pack.artwork_asset}" if pack.artwork_asset else None)
             for key, pack in staged.packs.items()
-        })
+        }
+
+        self._plugins[descriptor.id] = descriptor
+        self._commit_owned("legion_preset", descriptor.id, self._legion_presets, staged.legion_presets)
+        self._commit_owned("pack", descriptor.id, self._packs, packs)
         self._assets.update({(descriptor.id, key): asset for key, asset in staged.assets.items()})
         self._commit_owned("node_type", descriptor.id, self._nodes, staged.nodes)
         self._commit_owned("capability", descriptor.id, self._capabilities, staged.capabilities)
@@ -726,9 +766,8 @@ class PluginRegistry:
                 candidate.validate_relationship_order(nodes[edge.source].type, nodes[edge.target].type, edge.relationship)
                 candidate.validate_direction(edge.relationship, edge.direction)
 
-        # Bundled Packs may collect canonical host cards without taking
-        # ownership. External distributions retain their own-card-only
-        # manifest check in install().
+        # Source and schema 3 Packs may collect canonical host cards without
+        # taking ownership.
         host_cards = {key for key in self._nodes
                       if self.node_type_owner_id(key) == "open-agent-world.core"}
         covered = set()
@@ -782,6 +821,14 @@ class PluginRegistry:
                     asset = staged.assets.get(face.image_asset)
                     if asset is None or not asset.media_type.startswith("image/"):
                         raise ValueError("card face image must reference an image asset registered by the same plugin")
+            if definition.authoring is not None:
+                from backend.packs.interfaces import CardInterface
+                interface = CardInterface.model_validate(definition.authoring)
+                actions = {interface.action, *(binding.logic_id for binding in interface.function.button_bindings or [])}
+                if actions - definition.resource_actions.keys():
+                    raise ValueError("Card interfaces must bind registered resource actions")
+            elif 'oaw.authoring-card' in definition.frontend.values():
+                raise ValueError("The authoring renderer requires a validated Card interface")
             if definition.icon_asset is not None and definition.icon_asset not in staged.assets:
                 raise ValueError("node icon must reference an asset registered by the same plugin")
             for slot, reference in definition.frontend.items():
@@ -973,7 +1020,30 @@ class PluginRegistry:
         return plugin_id in self._plugins
 
     def is_enabled(self, plugin_id: str) -> bool:
-        return self.has_plugin(plugin_id) and plugin_id not in self._disabled
+        return self.has_plugin(plugin_id) and plugin_id not in self._disabled and not self.unavailable_reason(plugin_id)
+
+    def unavailable_reason(self, plugin_id: str):
+        return next((row for row in self.load_failures if row.get('owner') == plugin_id), None)
+
+    def mark_unavailable(self, plugin_id: str, phase: str, error: BaseException, *, source="lifecycle") -> set[str]:
+        """Transient availability, separate from the user's durable enabled intent."""
+        from backend.plugins.failures import raise_if_unsafe
+        raise_if_unsafe(error)
+        if plugin_id == 'open-agent-world.core':
+            raise error
+        affected = {plugin_id}
+        while True:
+            downstream = {p.id for p in self.plugins() if set(p.requires_plugins) & affected}
+            if downstream <= affected:
+                break
+            affected.update(downstream)
+        for owner in sorted(affected):
+            if not self.unavailable_reason(owner):
+                self.load_failures.append(dict(id=owner, owner=owner, source=source, state='unavailable',
+                    phase=phase if owner == plugin_id else 'dependency',
+                    error=str(error) if owner == plugin_id else f'Required plugin {plugin_id} is unavailable',
+                    retry='repair_and_restart'))
+        return affected
 
     def set_enabled(self, plugin_id: str, enabled: bool) -> None:
         if not self.has_plugin(plugin_id):
@@ -985,11 +1055,13 @@ class PluginRegistry:
 
     def _assert_enabled(self, kind: str, identifier: str) -> None:
         owner = self._owners.get((kind, identifier))
-        if owner in self._disabled:
-            raise PluginUnavailableError(f"Plugin {owner!r} is disabled")
+        if owner is not None and (owner in self._disabled or self.unavailable_reason(owner)):
+            raise PluginUnavailableError(f"Plugin {owner!r} is unavailable or disabled")
 
     def assert_runtime_provider_enabled(self, provider_id: str) -> None:
         self._assert_enabled("runtime_provider", provider_id)
+        if any(row['source'] == 'runtime_provider' and row['id'] == provider_id for row in self.load_failures):
+            raise PluginUnavailableError(f"Runtime provider {provider_id!r} is unavailable")
 
     def has_trait(self, type_id: str, trait: str) -> bool:
         definition = self._nodes.get(type_id)
@@ -1176,6 +1248,7 @@ class PluginRegistry:
     def catalog(self, *, include_disabled: bool = False) -> PluginCatalog:
         return PluginCatalog(
             plugins=list(self._plugins.values()),
+            enabled_plugin_ids=[owner for owner in self._plugins if self.is_enabled(owner)],
             packs=list(self._packs.values()),
             frontend_modules={key: value for key, value in self.frontend_modules.items() if self.is_enabled(key)},
             node_types=[

@@ -9,9 +9,12 @@ re-targets the same rows instead of creating duplicates.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 
 PIPELINE_NAME = "oaw.to_markdown"
+RETRYABLE_STATUSES = {"FAILED", "CANCELLED", "INTERRUPTED"}
 NAMESPACE = uuid.UUID("7c5b2f9a-1d64-4a3e-9c8b-0f2a6d31e4c7")
 
 
@@ -35,7 +38,9 @@ def _convert(context, state):
         data, source.filename, source.media_type,
         engine=context.parameters.get("engine", "auto"),
         mineru_base_url=context.parameters.get("mineru_base_url"),
-        resolve_secret=getattr(kb, "oaw_resolve_secret", None))
+        vision_model=context.parameters.get("vision_model") or "",
+        resolve_secret=getattr(kb, "oaw_resolve_secret", None),
+        resolve_model=getattr(kb, "oaw_resolve_model", None))
     context.check_cancelled()
 
     artifact_id = derived_id(source_id, "artifact")
@@ -60,7 +65,7 @@ def _index(context, state):
 
     record_id = derived_id(source_id, "record")
     evidence_id = derived_id(source_id, "evidence")
-    # The record carries the markdown a projection will read; the evidence link ties it
+    # The record carries the markdown an extraction will read; the evidence link ties it
     # back to the uploaded file so every downstream fact stays traceable (rule 4.2).
     with kb.transaction():
         if kb.records.get(record_id) is None:
@@ -104,10 +109,23 @@ def register_pipelines(kb):
     kb.pipelines.register(build_pipeline(), replace=True)
 
 
-def submit_markdown_job(kb, source, collection_id, *, engine="auto", mineru_base_url=None):
-    return kb.pipelines.submit(
-        PIPELINE_NAME,
-        inputs={"source_id": str(source.id), "collection_id": str(collection_id)},
-        parameters={"engine": engine, "mineru_base_url": mineru_base_url},
-        idempotency_key=f"markdown:{source.id}:{(source.sha256 or '')[:16]}",
-    )
+def submit_markdown_job(kb, source, collection_id, *, engine="auto", mineru_base_url=None,
+                        vision_model="", previous_job=None):
+    # A model reference is a name, not a credential: safe to persist with the job.
+    inputs = {"source_id": str(source.id), "collection_id": str(collection_id)}
+    parameters = {"engine": engine, "mineru_base_url": mineru_base_url,
+                  "vision_model": vision_model or ""}
+    key = f"markdown:{source.id}:{(source.sha256 or '')[:16]}"
+    job = previous_job or kb.pipelines.submit(
+        PIPELINE_NAME, inputs=inputs, parameters=parameters, idempotency_key=key)
+    converted = bool((job.checkpoint.get("state") or {}).get("artifact_id"))
+    if job.status in RETRYABLE_STATUSES and job.parameters != parameters and not converted:
+        # Correcting a converter/model setting needs a new attempt with those
+        # parameters. Once conversion succeeded, resume indexing the retained
+        # artifact with its original provenance instead of converting it again.
+        settings_key = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:16]
+        job = kb.pipelines.submit(PIPELINE_NAME, inputs=inputs, parameters=parameters,
+                                  idempotency_key=f"{key}:{job.id}:{settings_key}")
+    if job.status in RETRYABLE_STATUSES:
+        return kb.pipelines.resume(job.id)
+    return job

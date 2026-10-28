@@ -93,7 +93,7 @@ def test_catalog_default_details_and_pack(client):
 def test_schema_preview_handles_nullable_type_arrays_without_granting_data_access(client):
     source = create_node(client, "knowledge.base")
     chart = create_node(client, "data.visualization.line")
-    response = client.post(f"/api/nodes/{source['id']}/resource/schemas", json={"arguments": {
+    response = client.post(f"/api/nodes/{source['id']}/resource/schema_manage", json={"arguments": {
         "operation": "create", "name": "Nullable readings", "kind": "experiment",
         "definition": {"type": "object", "properties": {
             "samples": {"type": ["array", "null"], "items": {"type": ["object", "null"], "properties": {
@@ -133,7 +133,7 @@ def test_knowledge_datasets_use_real_schema_and_published_graph(client):
     kb.oaw_graph_store.upsert_entity(a)
     kb.oaw_graph_store.upsert_entity(b)
     kb.oaw_graph_store.upsert_relation(Relation(id=uuid4(), source_id=a.id, target_id=b.id, type="has", **dates))
-    schema = actions.schemas(context, {"operation": "create", "name": "Measurements", "kind": "experiment",
+    schema = actions.schema_manage(context, {"operation": "create", "name": "Measurements", "kind": "experiment",
         "definition": {"type": "object", "properties": {"sample": {"type": "string"}, "reading": {"type": "number"}}},
         "system_prompt": "Extract sample and reading."})["schema"]
     result = read(client, chart, source, "schemas")
@@ -145,12 +145,20 @@ def test_knowledge_datasets_use_real_schema_and_published_graph(client):
     assert len(graph.json()["nodes"]) == 2 and len(graph.json()["edges"]) == 1
     limited = read(client, chart, source, schema_id="graph", limit=1).json()
     assert limited["truncated"] and limited["edges"] == []
-    kb.oaw_experiments.create(group_id=uuid4(), schema_id=schema['id'], name="Copper",
-                              data={"sample": "Copper", "reading": 12.5})
+    record = kb.oaw_experiments.create(group_id=uuid4(), schema_id=schema['id'], name="Copper",
+                                       data={"sample": "Copper", "reading": 12.5})
+    assert read(client, chart, source, schema_id=dataset["id"]).json()["rows"] == []
+    reviewed = client.post(f"/api/nodes/{source['id']}/resource/experiment_review", json={
+        "arguments": {"operation": "publish", "record_id": record["id"]}, "confirm": True})
+    assert reviewed.status_code == 200, reviewed.text
     records = read(client, chart, source, schema_id=f"experiments:{schema['id']}", columns=["sample", "reading"])
     assert records.status_code == 200, records.text
     assert records.json()["columns"] == ["sample", "reading"]
     assert records.json()["rows"] == [["Copper", 12.5]]
+    reviewed = client.post(f"/api/nodes/{source['id']}/resource/experiment_review", json={
+        "arguments": {"operation": "unpublish", "record_id": record["id"]}})
+    assert reviewed.status_code == 200, reviewed.text
+    assert read(client, chart, source, schema_id=dataset["id"]).json()["rows"] == []
     assert read(client, chart, source, schema_id="experiments:00000000-0000-0000-0000-000000000000").status_code == 422
 
 
@@ -166,11 +174,14 @@ def test_knowledge_schema_references_and_nested_array_records(client):
     definition = {"type": "object", "$defs": {"Reading": {"type": "object", "properties": {
         "step": {"type": "integer"}, "value": {"anyOf": [{"type": "number"}, {"type": "null"}]}}}},
         "properties": {"samples": {"type": "array", "items": {"$ref": "#/$defs/Reading"}}}}
-    schema = actions.schemas(context, {"operation": "create", "name": "Series", "kind": "experiment",
+    schema = actions.schema_manage(context, {"operation": "create", "name": "Series", "kind": "experiment",
         "definition": definition, "system_prompt": "Extract the readings."})["schema"]
     kb = actions._client(context)
-    kb.oaw_experiments.create(group_id=uuid4(), schema_id=schema['id'], name="Run",
-                              data={"samples": [{"step": 1, "value": 2.5}, {"step": 2, "value": None}]})
+    record = kb.oaw_experiments.create(group_id=uuid4(), schema_id=schema['id'], name="Run",
+                                       data={"samples": [{"step": 1, "value": 2.5}, {"step": 2, "value": None}]})
+    reviewed = client.post(f"/api/nodes/{source['id']}/resource/experiment_review", json={
+        "arguments": {"operation": "publish", "record_id": record["id"]}, "confirm": True})
+    assert reviewed.status_code == 200, reviewed.text
     schemas = read(client, chart, source, "schemas").json()["schemas"]
     item = next(item for item in schemas if item["id"].endswith(":samples"))
     assert item["fields"] == [{"name": "step", "type": "number"}, {"name": "value", "type": "number"}]

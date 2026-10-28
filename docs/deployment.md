@@ -1,8 +1,10 @@
 # Published applications
 
-Try the ready-to-run, key-free example with `python examples/deployed-workspace/run.py`. It opens <http://127.0.0.1:38475>; the demo password is `oaw-demo-2026`. See the [example instructions](../examples/deployed-workspace/README.md). For a real (model-calling) published Legion, see the [Knowledge research deployment example](../examples/knowledge-legion-deploy/README.md).
+Try the ready-to-run, key-free example with `python examples/deployed-workspace/run.py`. It opens <http://127.0.0.1:38475>; the demo password is `oaw-demo-2026`. See the [example instructions](../examples/deployed-workspace/README.md). For a real (model-calling) published Legion, see the [Lab Manager deployment example](../examples/knowledge-legion-deploy/README.md).
 
-[Documentation](README.md) · [简体中文 / complete deployment guide](deployment.zh-CN.md)
+[Documentation](README.md)
+
+For separate accounts, conversations and files with direct entry to a published page, use the native Linux systemd [hosted multi-user setup](contributing/hosting.md); Docker is not required. This page describes shared-password access to an individual deployment.
 
 Publish a saved Legion workspace as a locked application. The operator service runs an independent profile copy and exposes a small authenticated business API. It does not mount the editor, management APIs, model settings, or world event stream. Source-profile edits do not affect an existing deployment.
 
@@ -47,18 +49,24 @@ The runtime has its own password login; never proxy the engineering API or distr
 - The snapshot includes the entire source profile (including existing history, files and encrypted credentials) to preserve cross-Legion dependencies. Only published surfaces are projected through the operator API. Keep the deployment directory host-private.
 - Windows credentials remain account-bound. Prepare and run under the same host/account. Cross-host migration requires rebinding credentials, plugins and external dependencies.
 - Known external workspace bindings require `--allow-external-workspaces`. They remain shared external folders, outside the snapshot and rollback. Review plugin-specific dependencies separately.
-- Supported public surfaces: Conversation and its sections, Sandbox files/preview and explicitly allowed terminal, Text, Image, `oaw.tasks` task boards, and Agent status. Third-party and future plugins opt in through `NodeDeploymentDefinition`, reusing existing views and handlers; see [plugin deployment](plugin-deployment.md). Undeclared custom surfaces (including currently unadapted MatCreator views) fail publication and may remain as hidden backend dependencies.
+- Supported public surfaces: Conversation and its sections, Sandbox files/preview and explicitly allowed terminal, Text, Image, task boards, Agent status, Agent Graph, Jobs, and artifact listing/preview/download. The original MatCreator research layout also supports its knowledge graph and connected Structure Viewer. Third-party document cards can opt in with `NodeDeploymentDefinition.from_document()` without separate endpoints; precise permissions remain available. See [plugin deployment](plugin-deployment.md). The publish dialog checks all panes before release creation; undeclared custom surfaces remain private.
 - The deployed UI reuses Legion Workspace, WorkspaceSection and the existing business components. Layout splits are fixed; users can switch tabs without losing drafts. Only engineering controls are omitted. Text uses the original editor in read-only mode. Hidden/unplaced cards have no fallback inspector. Graph structure and configuration changes are rejected even through internal Agent graph operations.
 - Graph/configuration snapshots do not freeze normal business state: conversations, authorized documents, tasks and workspace files remain writable. Plugin versions are checked at startup. Preserve the release's code checkout/build as well as its data.
 
-Stop the service before backing up the entire deployment directory, matching code, keys and external data. Runtime logs are under `logs/launcher.log`. See the [Chinese guide](deployment.zh-CN.md) for troubleshooting and detailed operational steps.
+Stop the service before backing up the entire deployment directory, matching code, keys and external data. Runtime logs are under `logs/launcher.log`. See the [Chinese guide](deployment.md) for troubleshooting and detailed operational steps.
 
 ## Verification
 
 ```bash
 python -m pytest backend/tests/test_deployments.py backend/tests/test_control_plane.py
+python -m pytest backend/tests/test_workspace_publication.py backend/tests/test_hosted_worker.py
 npm --prefix frontend run build
 npm --prefix frontend run test:e2e:deployment
+npm --prefix frontend run test:e2e:publication
 ```
 
-The browser suite uses a disposable mock-Agent deployment. It validates UI and API boundaries, not native OS Sandbox isolation.
+The browser suites use disposable deployments. The research suite publishes the
+original MatCreator layout, saves knowledge, downloads an artifact and opens a
+Sandbox file in the existing 3D viewer. It uses an offline test Sandbox OS adapter
+and makes no model or cloud calls; it validates UI/API integration, not OS isolation
+or live research execution.

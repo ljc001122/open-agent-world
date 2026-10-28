@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend import __version__
@@ -14,7 +14,7 @@ KEY = "ui_preferences.v1"
 IDENTITY = "application_identity.v1"
 PREFERENCE_KEYS = frozenset({
     "oaw-onboarding-v1", "oaw-progressive-tutorials-v1", "oaw-minister-role-learned", "oaw-canvas-viewport-v1", "oaw-glue-v1",
-    "oaw-node-surfaces-v1", "oaw-conversation-view-v1", "oaw-active-workspace-v1", "oaw-library-preferences", "oaw-theme", "oaw.locale",
+    "oaw-node-surfaces-v1", "oaw-conversation-view-v1", "oaw-active-workspace-v1", "oaw-library-preferences", "oaw-theme", "oaw.locale", "oaw.documentation.locale",
     "oaw-model-settings", "oaw.card-production-presets.v1", "open-agent-world.decks.v2", "open-agent-world.custom-decks.v1",
 })
 
@@ -68,8 +68,8 @@ router = APIRouter(prefix="/api/application", tags=["application"])
 
 
 @router.get("")
-def get_application(services=Depends(get_services)):
-    return application_snapshot(services)
+def get_application(request: Request, services=Depends(get_services)):
+    return {**application_snapshot(services), "hosted": bool(getattr(request.app.state, "hosted", False))}
 
 
 @router.patch("/preferences")

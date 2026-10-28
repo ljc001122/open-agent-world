@@ -2,6 +2,7 @@ import { cardStateSession, stateSessionHeaders } from "../state/cardState";
 import type { BackgroundJob, JobAction, JobsSnapshot } from '../cards/jobTypes';
 import { normalizeCardFinish } from '../cards/cardFinish';
 import { fetchWithRetry } from './fetchWithRetry';
+import { hostedInstanceUrl, isHosted } from '../auth/hostedSession';
 import type { SummoningSnapshot, SummonedInstance } from "../cards/Barracks";
 import type {
   CardConfig,
@@ -38,11 +39,11 @@ export function configureWorkspaceApi(deployed: boolean) {
 }
 
 export function conversationAttachmentUrl(conversationId: string, sessionId: string, file: { version_id: string; path: string }, preview = false): string {
-  return `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(file.version_id)}?${new URLSearchParams({ path: file.path, preview: String(preview) })}`;
+  return hostedInstanceUrl(`${API_BASE}/conversations/${encodeURIComponent(conversationId)}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(file.version_id)}?${new URLSearchParams({ path: file.path, preview: String(preview) })}`);
 }
 
 export function nodeDocumentDownloadUrl(id: string, name: string, sessionId: string | null = cardStateSession(id) ?? null): string {
-  return `${API_BASE}/nodes/${encodeURIComponent(id)}/document/downloads/${encodeURIComponent(name)}${sessionId ? `?state_session=${encodeURIComponent(sessionId)}` : ""}`;
+  return hostedInstanceUrl(`${API_BASE}/nodes/${encodeURIComponent(id)}/document/downloads/${encodeURIComponent(name)}${sessionId ? `?state_session=${encodeURIComponent(sessionId)}` : ""}`);
 }
 
 export class ApiError extends Error {
@@ -306,6 +307,42 @@ function unwrap<T>(input: unknown, key: string): T {
 }
 
 export const worldApi = {
+  listPackProjects(): Promise<import('../factory/projectTypes').ProjectList> {
+    return request('/packs/projects', { headers: { 'X-OAW-Pack-Install': '1' } });
+  },
+  createPackProject(input: { name: string; distribution_id?: string; directory?: string; design?: import('../factory/projectTypes').CardInterface }): Promise<import('../factory/projectTypes').PackProject> {
+    return request('/packs/projects/create', { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify(input) });
+  },
+  openPackProject(path: string): Promise<import('../factory/projectTypes').PackProject> {
+    return request('/packs/projects/open', { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify({ path }) });
+  },
+  getPackProject(id: string): Promise<import('../factory/projectTypes').PackProject> {
+    return request(`/packs/projects/${encodeURIComponent(id)}`, { headers: { 'X-OAW-Pack-Install': '1' } });
+  },
+  readPackProjectFile(id: string, path: string): Promise<import('../factory/projectTypes').ProjectTextFile> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/file?${new URLSearchParams({ path })}`, { headers: { 'X-OAW-Pack-Install': '1' } });
+  },
+  writePackProjectFile(id: string, file: { path: string; content: string; expected_sha256: string | null }): Promise<import('../factory/projectTypes').ProjectTextFile> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/file`, { method: 'PUT', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify(file) });
+  },
+  savePackProjectDesign(id: string, input: { card_id: string; design: import('../factory/projectTypes').CardInterface; expected_revision: string }): Promise<import('../factory/projectTypes').PackProject> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/design`, { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify(input) });
+  },
+  addPackProjectCard(id: string, input: { name: string; expected_revision: string }): Promise<import('../factory/projectTypes').PackProject> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/cards`, { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify(input) });
+  },
+  versionPackProject(id: string, input: { version: string; expected_revision: string }): Promise<import('../factory/projectTypes').PackProject> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/version`, { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify(input) });
+  },
+  checkPackProject(id: string, expected_revision: string): Promise<import('../factory/projectTypes').ProjectCheck> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/check`, { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify({ expected_revision }) });
+  },
+  buildPackProject(id: string, input: { expected_revision: string; backend_wheel?: string; frontend_dir?: string }): Promise<Blob> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/build`, { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify(input) });
+  },
+  previewPackProject(id: string, design: import('../factory/types').FunctionDesign, values: Record<string, import('../factory/types').Scalar>): Promise<{ result: import('../factory/types').Scalar; level: string }> {
+    return request(`/packs/projects/${encodeURIComponent(id)}/preview`, { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, body: JSON.stringify({ design, values }) });
+  },
   backgroundJobs(id: string, sessionId: string | null): Promise<JobsSnapshot> {
     return request(`/nodes/${encodeURIComponent(id)}/jobs`, { headers: stateSessionHeaders(sessionId) });
   },
@@ -345,6 +382,9 @@ export const worldApi = {
       { method: 'POST', headers: { 'X-OAW-Pack-Install': '1' }, signal });
   },
   getInstalledPacks(): Promise<import('../types/packs').PackInstallations> { return request('/packs'); },
+  getPackUninstallPlan(id: string): Promise<import('../types/packs').PackUninstallPlan> {
+    return request(`/packs/${encodeURIComponent(id)}/uninstall-plan`);
+  },
   inspectPack(file: File): Promise<import('../types/packs').PackInspection> {
     return request('/packs/inspect', { method: 'POST', headers: { 'Content-Type': 'application/vnd.oaw.pack', 'X-OAW-Pack-Install': '1' }, body: file });
   },
@@ -799,7 +839,7 @@ export const worldApi = {
   },
   retainedArtifacts<T>(): Promise<T> { return request("/artifacts/retained"); },
   artifactDownloadUrl(collectionId: string, versionId: string, path: string): string {
-    return `${API_BASE}/artifact-collections/${encodeURIComponent(collectionId)}/versions/${encodeURIComponent(versionId)}/content?${new URLSearchParams({ path })}`;
+    return hostedInstanceUrl(`${API_BASE}/artifact-collections/${encodeURIComponent(collectionId)}/versions/${encodeURIComponent(versionId)}/content?${new URLSearchParams({ path })}`);
   },
   lifecycle<T>(retry = false): Promise<T> {
     return request(`/lifecycle${retry ? "/retry-cleanup" : ""}`, retry ? { method: "POST" } : undefined);
@@ -807,6 +847,12 @@ export const worldApi = {
   cancelRun(runId: string): Promise<unknown> { return request(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }); },
   getRunReasoning(runId: string, offset = 0): Promise<{ items: import("../types/world").SavedModelThinking[]; next_offset: number | null }> {
     return request(`/runs/${encodeURIComponent(runId)}/reasoning?offset=${offset}&limit=50`);
+  },
+  getRunActivity(runId: string, offset = 0, latest = false): Promise<{ items: import('../state/runActivity').RunActivityItem[]; total: number; incomplete?: boolean; next_offset: number | null }> {
+    return request(`/runs/${encodeURIComponent(runId)}/activity?offset=${offset}&limit=50&latest=${latest}`);
+  },
+  getRunActivityDetail(runId: string, identity: string): Promise<Partial<import('../types/world').SavedInvocation> & { text?: string }> {
+    return request(`/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(identity)}`);
   },
   getRunReasoningText(runId: string, identity: string): Promise<import("../types/world").SavedModelThinking> {
     return request(`/runs/${encodeURIComponent(runId)}/reasoning/${encodeURIComponent(identity)}`);
@@ -1042,13 +1088,13 @@ export interface SandboxSettings {
 
 export function runtimeWebSocketUrl(): string {
   const configured = import.meta.env.VITE_WS_URL as string | undefined;
-  if (configured) return configured;
+  if (configured && !isHosted()) return configured;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/events`;
+  return hostedInstanceUrl(`${protocol}//${window.location.host}/ws/events`);
 }
 
 export function resourceContentUrl(nodeId: string): string {
-  return `${API_BASE}/resources/${encodeURIComponent(nodeId)}/content`;
+  return hostedInstanceUrl(`${API_BASE}/resources/${encodeURIComponent(nodeId)}/content`);
 }
 
 export function normalizeRuntimeEvent(input: unknown): RuntimeEvent {

@@ -19,10 +19,36 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
+  source-launchers:
+    name: Source startup (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Test source launchers without installing application dependencies
+        run: python scripts/test-source-launchers.py
+      - name: Test npm discovery and build receipts
+        run: node --test frontend/scripts/source-startup.test.mjs
+
   backend:
-    name: Backend tests
+    name: Backend tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Separate runners isolate tests that prepare plugins, files and subprocesses.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -37,6 +63,13 @@ jobs:
       - name: Sync locked backend dependencies
         working-directory: backend
         run: uv sync --locked --all-extras --group dev
+      - name: Verify startup with only locked Core dependencies
+        if: matrix.shard == 1
+        run: |
+          uv venv .tmp/core-only
+          uv export --project backend --locked --no-dev --no-emit-project --no-hashes --output-file .tmp/core-requirements.txt
+          uv pip install --python .tmp/core-only/bin/python -r .tmp/core-requirements.txt
+          .tmp/core-only/bin/python scripts/check-core-startup.py
       - name: Install repository plugins
         working-directory: backend
         shell: bash
@@ -53,14 +86,19 @@ jobs:
             install_args+=(--editable "$plugin_root")
           done
           uv pip install --python .venv/bin/python "${install_args[@]}"
+      - name: Strict optional plugin activation
+        run: backend/.venv/bin/python -c "from backend.plugins.loader import load_plugin_registry; load_plugin_registry(strict=True)"
       - name: Run backend and public SDK test suites
-        run: backend/.venv/bin/python .github/run-backend-tests.py tests backend/tests --junitxml=.tmp/backend-linux.xml
+        run: >-
+          backend/.venv/bin/python .github/run-backend-tests.py tests backend/tests packs/codex/tests
+          --shard ${{ matrix.shard }}/4 --durations=20
+          --junitxml=.tmp/backend-linux-${{ matrix.shard }}.xml
       - name: Upload backend results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-linux-results
-          path: .tmp/backend-linux.xml
+          name: backend-linux-results-${{ matrix.shard }}
+          path: .tmp/backend-linux-${{ matrix.shard }}.xml
           include-hidden-files: true
           retention-days: 7
 
@@ -83,19 +121,55 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Install locked deployment backend
-        run: uv sync --project backend --locked --dev --python 3.12
-      - name: Run frontend tests
-        working-directory: frontend
-        run: npm test
+        run: uv sync --project backend --locked --dev --extra hosting --extra adk --extra litellm --python 3.12
+      - name: Install operator-approved plugin dependencies for hosted workers
+        run: >-
+          backend/.venv/bin/python -c "from pathlib import Path; import subprocess, sys;
+          subprocess.run(['uv', 'pip', 'install', '--python', sys.executable,
+          *[str(p.parent) for p in sorted(Path('plugins').glob('*/pyproject.toml'))]], check=True)"
       - name: Type-check and build frontend
         working-directory: frontend
         run: npm run build
+      - name: Run frontend tests with prepared Pack dependencies
+        working-directory: frontend
+        run: npm test
+      - name: Verify Pack build dependency boundaries
+        working-directory: frontend
+        run: npm run test:pack-sdk
       - name: Install UI acceptance browsers
         working-directory: frontend
         run: npx --no-install playwright install --with-deps chromium webkit
+      - name: Pack the public SDK and build external Greeter
+        run: |
+          mkdir -p .outputs
+          npm pack ./frontend/pack-sdk --pack-destination .outputs
+          backend/.venv/bin/python scripts/build-external-greeter.py
+      - name: Install external Pack and verify cards and assets after restart
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_CHANNEL: chromium
+        run: npm run test:e2e:packs
+      - name: Upload the versioned public Pack SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: oaw-plugin-api-1.0.0-${{ github.sha }}
+          path: .outputs/oaw-plugin-api-1.0.0.tgz
+          if-no-files-found: error
+      - name: Build and install an external declarative Pack
+        env:
+          PLAYWRIGHT_CHANNEL: chromium
+        run: |
+          backend/.venv/bin/python scripts/build-external-notes.py
+          node frontend/scripts/run-pack-e2e.mjs --declarative
       - name: Run deployment acceptance against production frontend
         working-directory: frontend
         run: npm run test:e2e:deployment
+      - name: Verify the published MatCreator workspace and shared card APIs
+        working-directory: frontend
+        run: npm run test:e2e:publication
+      - name: Verify hosted login and independent user workspaces
+        working-directory: frontend
+        run: npm run test:e2e:hosting
       - name: Verify shared UI in Chromium and WebKit
         working-directory: frontend
         run: npm run test:e2e:ui
@@ -106,11 +180,38 @@ jobs:
           name: deployment-browser-failure
           path: |
             .tmp/deployment-playwright/
+            .tmp/publication-playwright/
             .tmp/deployment-desktop.png
             .tmp/deployment-mobile.png
+            .tmp/hosting-playwright/
+            .tmp/hosting-login.png
+            .tmp/hosting-canvas.png
             .tmp/ui-playwright/
+            .outputs/pack-acceptance/
           include-hidden-files: true
           retention-days: 7
+
+  required:
+    name: CI required
+    if: always()
+    needs: [source-launchers, backend, frontend, windows-smoke, version]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every check to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python -c 'import json,os; results=json.loads(os.environ["RESULTS"]); assert all(job["result"] == "success" for job in results.values()), results'
+
+  version:
+    name: Application version consistency
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python scripts/check-release.py
 
   windows-smoke:
     name: Core smoke (Windows)
@@ -123,14 +224,30 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Install locked backend dependencies
-        run: uv sync --project backend --locked --dev --python 3.12
+        run: uv sync --project backend --locked --all-extras --group dev --python 3.12
+      - name: Install repository plugin test dependencies
+        run: >-
+          backend/.venv/Scripts/python.exe -c "from pathlib import Path; import subprocess, sys;
+          subprocess.run(['uv', 'pip', 'install', '--python', sys.executable,
+          *[str(p.parent) for p in sorted(Path('plugins').glob('*/pyproject.toml'))]], check=True)"
+      - name: Check Windows source setup and dev launch contracts
+        run: |
+          ./scripts/test-dev-environment.ps1
+          ./scripts/test-dev-startup.ps1
+          ./scripts/test-desktop-build.ps1
       - name: Check startup, access boundaries, deployment, persistence and migration
         run: >-
           backend/.venv/Scripts/python.exe .github/run-backend-tests.py
           backend/tests/test_application_launch.py
+          backend/tests/test_source_scripts.py
+          backend/tests/test_plugin_setup.py
           backend/tests/test_control_plane.py
           backend/tests/test_http_foundations.py
           backend/tests/test_request_context.py
+          backend/tests/test_hosted_accounts.py
+          backend/tests/test_hosted_auth.py
+          backend/tests/test_hosted_profile.py
+          backend/tests/test_hosting_oidc.py
           backend/tests/test_idempotency.py
           backend/tests/test_deployments.py
           backend/tests/test_persistence_and_events.py

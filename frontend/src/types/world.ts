@@ -169,6 +169,7 @@ export interface WorldSnapshot {
 }
 
 export interface NodeTypeCatalogItem {
+  authoring?: import('../factory/projectTypes').CardInterface | null;
   data_consumer?: import('../plugins/dataSources').DataConsumer | null;
   tutorials?: import('../tutorials/types').TutorialDefinition[];
   /** Layout and colour are independent of the owned card's material finish. */
@@ -241,8 +242,10 @@ export interface PackDefinition {
   packaging?: PackPackaging;
 }
 
-export interface RuntimeFrontendModule { version: string; api_version: number; url: string }
+export interface RuntimeFrontendModule { version: string; api_version: number; url: string; distribution_id?: string }
 export interface PluginCatalog {
+  /** Enabled owners, including service-only providers without visible cards. */
+  enabled_plugin_ids?: string[];
   frontend_modules?: Record<string, RuntimeFrontendModule>;
   packs: PackDefinition[];
   plugins: Array<{

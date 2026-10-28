@@ -1,28 +1,47 @@
-# Contribute to OAW
+# Contribute to and maintain OAW
 
-Use this route when changing the host, its documentation, or a release. To build
-an independently installed extension, start with [Build a plugin](../developers/index.md).
+Use this path to change the host, maintain documentation, or operate a deployment.
+For an independent Card App, use the [developer guide](../developers/index.md).
 
-## Follow a change through the host
+## Develop a change
 
-1. [Run from source](../getting-started.md) and choose an isolated development profile.
-2. Read [Architecture](../architecture.md) to find the component that owns the behavior.
-3. Use the [technical reference](../reference/index.md) for the contract you are changing.
-4. Run the relevant tests and the checks in [the CI guide](../../.github/CI.md).
-5. Update the affected guide or reference using the [documentation checklist](docs-checklist.md).
+1. Branch from the current `origin/dev` in a separate checkout or worktree.
+2. [Run from source](../getting-started.md) with an isolated development profile.
+3. Read [Architecture](../architecture.md) and the contract for the affected subsystem.
+4. Run the smallest relevant checks, then the subsystem tests required by the risk.
+5. Update the affected guide and open a PR against `dev`.
 
-## Choose a maintenance task
+Preserve security, authorization, persistence and lifecycle assertions. Report
+which checks ran and what remains unverified. Do not infer installed-desktop,
+production or native isolation acceptance from unit tests or a browser build.
 
-| Task | Start here | Continue with |
-| --- | --- | --- |
-| Change canvas behavior | [Canvas control](../canvas-control.md) | [Placement](../layout.md), [performance](../canvas-performance.md), [terrain](../terrain-webgl.md) |
-| Change first-use guidance | [Tutorial implementation](../tutorial.md) | [First task and recovery](../product-first-use.md) |
-| Change runtime boundaries | [Architecture](../architecture.md) | [Security](../security.md), [enterprise foundations](../enterprise-foundations.md) |
-| Package the desktop app | [Desktop development](../desktop.md) | [Release procedure](../releasing.md) |
-| Publish a workspace | [Workspace deployment](../deployment.md) | [Plugin deployment contract](../plugin-deployment.md) |
-| Write documentation | [Writing checklist](docs-checklist.md) | [Preview, validate, and publish](../developers/documentation.md) |
+## CI and repository settings
 
-Proposals, profiling reports, and dated acceptance evidence live in the
-[maintainer records](../internal/README.md) on GitHub. Published references explain
-the maintained behavior; records explain what was proposed or verified at a
-particular revision.
+[The CI guide](../../.github/CI.md) describes workflow-owned checks, including
+`CI required`, `Docs required` and `Native required`. Inspect the checks on the
+actual PR and its current commit before deciding it is ready to merge. Do not
+trigger duplicate full runs for an unchanged commit.
+
+### Repository administrator setup
+
+Rulesets, approval counts and bypass actors are live GitHub settings. A clone
+cannot establish their current state, and this guide does not assert a particular
+active ruleset. Administrators should inspect **Settings → Rules → Rulesets**
+when reviewing policy. Changing documentation or adding workflows does not
+change repository permissions. Release publication follows [the release procedure](../releasing.md).
+
+## Operate and extend the host
+
+| Task | Guide |
+| --- | --- |
+| Build or debug desktop | [Desktop](../desktop.md) |
+| Release the application | [Releasing](../releasing.md) |
+| Publish a locked workspace | [Deployment](../deployment.md) |
+| Run hosted profiles | [Hosting](hosting.md) |
+| Change first-use guidance | [Tutorial maintenance](../tutorial.md) |
+| Change authentication/context | [Request boundaries](../enterprise-foundations.md), [security](../security.md) |
+| Change graph rendering | [Relationship maps](../graph-architecture.md), [canvas performance](../canvas-performance.md) |
+| Edit the manual | [Documentation maintenance](../developers/documentation.md) |
+
+[Internal records](../internal/README.md) are non-authoritative historical evidence,
+not current operating instructions.

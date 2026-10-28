@@ -19,9 +19,10 @@ def plugin_usage(services: ApplicationServices, plugin_id: str) -> list[str]:
     """Keep the existing lifecycle intact: no hot unload of objects or providers."""
     usages = []
     for card in services.world.list_cards():
-        if services.plugins.node_type_owner_id(card.type) == plugin_id:
+        owner = card.missing_plugin.plugin_id if card.missing_plugin else services.plugins.node_type_owner_id(card.type)
+        if owner == plugin_id:
             usages.append(f"card {card.name}")
-        elif services.plugins.has_trait(card.type, "core.agent"):
+        elif not card.missing_plugin and services.plugins.has_trait(card.type, "core.agent"):
             provider = services.run_manager.provider_id_for_card(card)
             if provider:
                 try:
@@ -53,9 +54,18 @@ async def edit_library(request: LibraryEdit, services: ApplicationServices = Dep
     # unrelated world cleanup. Only disabling changes runtime availability.
     disabling = request.action == "set_plugin_enabled" and request.enabled is False
     async with services._node_mutation(read_only=not disabling):
+        if request.action == "dismiss_pack":
+            pack = services.card_library.read().packs.get(request.id or "")
+            if pack and (any(manifest.owner_id == pack.definition.plugin_id
+                             for manifest in services.pack_installations.selected().values())
+                         or any(spec.owner == pack.definition.plugin_id and services.pack_installations.source_enrolled(key)
+                                for key, spec in services.pack_installations.source_specs().items())):
+                raise ConflictError("Uninstall this Pack before removing its inventory entry")
         if (request.action == "set_plugin_enabled" and request.enabled
-                and request.id in services.plugins.installed_packs
-                and request.id not in services.pack_installations.selected()):
+                and (any(manifest.owner_id == request.id and manifest.id not in services.pack_installations.selected()
+                         for manifest in services.plugins.installed_packs.values())
+                     or any(spec.owner == request.id and not services.pack_installations.source_enrolled(key)
+                            for key, spec in services.pack_installations.source_specs().items()))):
             raise ConflictError("This Pack is scheduled for uninstall. Select an installed version and restart OAW before enabling it.")
         if request.action == "set_plugin_enabled" and request.enabled is False:
             usages = plugin_usage(services, request.id or "")

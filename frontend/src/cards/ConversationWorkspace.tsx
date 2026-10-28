@@ -6,9 +6,11 @@ import { useConversationTimeline } from "../state/useConversationTimeline";
 import { useRunActivity } from "../state/useRunActivity";
 import { conversationTranscript } from '../state/conversationTranscript';
 import { conversationTurns } from '../state/conversationTurns';
-import { conversationSections } from '../state/conversationSections';
+import { useLiveRunHistory } from '../state/useLiveRunHistory';
+import { useStickyDisclosures } from '../state/useStickyDisclosures';
 import type { TranscriptEntry } from '../state/conversationTranscript';
-import { ConversationExecution, ConversationHistory, RunActivityStatus, RunActivityText } from "./ConversationActivity";
+import { ConversationExecution, RunActivityStatus, RunActivityText } from "./ConversationActivity";
+import { ConversationRunHistory } from './ConversationRunHistory';
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ConversationAttachments } from "./ConversationAttachments";
 import { ConfirmDialog, type Confirmation } from '../components/ConfirmDialog';
@@ -128,7 +130,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
   }, [copiedMessageId]);
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [error, setError] = useState<string>();
-  const transcript = useRef<HTMLDivElement>(null);
+  const transcript = useRef<HTMLDivElement | null>(null);
 
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const selectedScope = useRef("");
@@ -174,6 +176,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
   const selectedAgentId = participants.some(agent => agent.id === preferredAgentId)
     ? preferredAgentId : participants[0]?.id;
   const history = useConversationTimeline(card.id, !deployed || permissions[card.id]?.includes('conversation') ? activeSessionId : undefined, refreshEvent, socketLive, transcript, runtimeEvents);
+  const attachTranscript = useStickyDisclosures(transcript);
   const visibleOutgoing = outgoing.filter((item) => item.message.conversation_id === card.id
     && item.message.session_id === activeSessionId && !history.messages.some((message) => message.id === item.message.id));
   const messages = [...history.messages, ...visibleOutgoing.map((item) => item.message)];
@@ -190,7 +193,16 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
   }, [outgoing]);
   const activeRuns = history.activeRuns;
   const activity = useRunActivity(card.id, activeSessionId, runtimeEvents, activeRuns, history.runSummaries);
-  const transcriptEntries = conversationTranscript(messages, activity.runs, activity.activities, history);
+  const restoredActivity = useLiveRunHistory(activity.runs, activity.activities);
+  const transcriptEntries = conversationTranscript(messages, activity.runs, restoredActivity.activities, history);
+  // A Run can contain several progress replies plus a final system notice.
+  // Attach recovery to its last visible message, not every reply in that Run.
+  const recoveryMessageIds = new Map<string, string>();
+  for (const entry of transcriptEntries) {
+    if (entry.kind === 'message' && entry.message.run_id && entry.message.sender_kind !== 'user') {
+      recoveryMessageIds.set(entry.message.run_id, entry.message.id);
+    }
+  }
   const transcriptTurns = conversationTurns(transcriptEntries, activity.runs, error ? [] : activeRuns);
   const deliveryAgents = new Map(agents.map((agent) => [agent.id, agent.name]));
   const activeGroupId = activeSession?.group_id ?? activeSession?.id;
@@ -601,7 +613,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
         <div
           className="workspace-transcript"
           aria-live="polite"
-          ref={transcript}
+          ref={attachTranscript}
           onScroll={history.onScroll}
         >
           <div className="conversation-transcript-content" data-empty={!error && !history.error && messages.length === 0 && activeRuns.length === 0 && !history.loading || undefined}>
@@ -613,13 +625,16 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
           ) : null}
           {transcriptTurns.map((turn) => {
             const agentName = turn.kind === 'agent' ? agents.find(agent => agent.id === turn.agentId)?.name ?? turn.name ?? turn.agentId : '';
-            const renderEntry = (entry: TranscriptEntry, inHistory = false) => {
+            const renderEntry = (entry: TranscriptEntry) => {
+            if (entry.kind === 'archive') return <ConversationRunHistory key={entry.id} run={entry.run} messages={entry.messages} />;
             if (entry.kind === 'execution') return <ConversationExecution key={entry.id} group={entry}
-              agentName={agentName} history={inHistory} />;
-            if (entry.kind === 'activity') return <div key={entry.id} className="conversation-message-bubble" data-activity-id={entry.item.id}>
-              <RunActivityText item={entry.item} runId={entry.run.run_id}
-                active={['created', 'running', 'waiting'].includes(entry.run.status)} />
-            </div>;
+              agentName={agentName} history={restoredActivity.earlier.has(entry.run.run_id)} earlier={entry.truncated ? {
+                loading: restoredActivity.earlier.get(entry.run.run_id)?.loading ?? false,
+                error: restoredActivity.earlier.get(entry.run.run_id)?.error ?? '',
+                load: () => void restoredActivity.loadEarlier(entry.run.run_id),
+              } : undefined} />;
+            if (entry.kind === 'activity') return <RunActivityText key={entry.id} item={entry.item} runId={entry.run.run_id}
+              active={['created', 'running', 'waiting'].includes(entry.run.status)} />;
             const message = entry.message;
             return (
             <article className={`workspace-message is-${message.sender_kind}`} key={message.id} data-message-id={message.id}
@@ -633,7 +648,7 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                   ? <details className="conversation-tool-message"><summary>{message.content.split("\n")[0]}</summary><pre>{message.content.split("\n").slice(1).join("\n").trim() || t("No additional details")}</pre></details>
                   : message.content ? (message.sender_kind === "agent" ? <MarkdownMessage content={message.content} /> : <p>{message.content}</p>) : null}
                 {message.attachments?.length ? <ConversationAttachments conversationId={card.id} sessionId={message.session_id} files={message.attachments} /> : null}
-                {message.run_id && ['failed', 'interrupted'].includes(history.runSummaries[message.run_id]?.status) && <div className="conversation-recovery" role="status">
+                {message.run_id && recoveryMessageIds.get(message.run_id) === message.id && ['failed', 'interrupted'].includes(history.runSummaries[message.run_id]?.status) && <div className="conversation-recovery" role="status">
                   <p>{history.runSummaries[message.run_id]?.recovery_kind === 'model_stream_interrupted'
                     ? t('The model connection ended before a complete response. {v0} tool result(s) were confirmed, but an in-flight action may still need checking. Review the current files and Structure before continuing.', {
                       v0: history.runSummaries[message.run_id]?.confirmed_tool_count ?? 0,
@@ -658,18 +673,6 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                       setSelectedAgentId(history.runSummaries[message.run_id!]?.agent_id);
                       messageInput.current?.focus();
                     }}>{t('Review safe continuation')}</button>}
-                  {!deployed && <button type="button" className="secondary-button" onClick={() => {
-                    useWorldStore.setState({ settingsOpen: true });
-                  }}>{t('Check model settings')}</button>}
-                </div>}
-                {(message.content || message.sender_kind === 'user') && <div className="conversation-message-actions">
-                  {message.content && <IconButton icon={copiedMessageId === message.id ? Check : Copy} size="sm" quiet
-                    label={t(copiedMessageId === message.id ? 'Message copied' : 'Copy message')}
-                    onClick={() => void copyMessage(message)} />}
-                  {message.sender_kind === 'user' && !visibleOutgoing.some(item => item.message.id === message.id && item.status !== 'confirmed') && <IconButton
-                    icon={GitBranch} size="sm" quiet label={t('Branch in new chat')}
-                    disabled={busy || uploading || !!draft.trim() || attachments.length > 0 || activeRuns.length > 0}
-                    onClick={() => void restartFrom(message)} />}
                 </div>}
                 {message.sender_kind === "user" ? (() => {
                   const queued = history.deliveries.filter((delivery) => delivery.message_id === message.id && delivery.status === "queued");
@@ -688,13 +691,19 @@ export function ConversationWorkspace({ card }: { card: WorldCard }) {
                   }}>{t('Copy back to composer')}</button>
                 </div> : null}
               </div>
+              {(message.content || message.sender_kind === 'user') && <footer className="conversation-message-actions">
+                {message.content && <IconButton icon={copiedMessageId === message.id ? Check : Copy} size="sm" quiet
+                  label={t(copiedMessageId === message.id ? 'Message copied' : 'Copy message')}
+                  onClick={() => void copyMessage(message)} />}
+                {message.sender_kind === 'user' && !visibleOutgoing.some(item => item.message.id === message.id && item.status !== 'confirmed') && <IconButton
+                  icon={GitBranch} size="sm" quiet label={t('Branch in new chat')}
+                  disabled={busy || uploading || !!draft.trim() || attachments.length > 0 || activeRuns.length > 0}
+                  onClick={() => void restartFrom(message)} />}
+              </footer>}
             </article>
             );
             };
-            const content = conversationSections(turn.entries, activity.runs, transcriptEntries).map(section =>
-              section.kind === 'history' ? <ConversationHistory key={section.id} section={section}>
-                {section.entries.map(entry => renderEntry(entry, true))}
-              </ConversationHistory> : renderEntry(section));
+            const content = turn.entries.map(entry => renderEntry(entry));
             if (turn.kind !== 'agent') return content;
             return <article key={turn.id} className="conversation-agent-turn" data-speaker-id={turn.agentId}>
               <span className="conversation-speaker-avatar"><Bot size={13} /></span>

@@ -56,13 +56,29 @@ def test_installed_external_plugin_still_loads(tmp_path, monkeypatch):
     assert "test.autoload_external" in {p.id for p in registry.plugins()}
 
 
+def test_retired_editable_source_cannot_reappear_from_stale_entrypoint(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    source = tmp_path / 'removed-project'
+    source.mkdir()
+    entry = SimpleNamespace(name='retired', value='retired:create_plugin',
+        dist=SimpleNamespace(read_text=lambda name: json.dumps({'url': source.as_uri(), 'dir_info': {'editable': True}})),
+        load=lambda: pytest.fail('A removed source must not load from stale editable metadata'))
+    monkeypatch.setattr(loader, 'entry_points', lambda: {loader.ENTRY_POINT_GROUP: [entry]})
+    registry = loader.load_plugin_registry(tmp_path / 'empty', strict=True)
+    assert [p.id for p in registry.plugins()] == ['open-agent-world.core']
+
+
 def test_broken_local_plugin_reports_manifest(tmp_path):
     entry = write_plugin(tmp_path, "autoload_broken")
     (tmp_path / entry.name / f"{entry.name}.py").write_text(
         "raise ImportError('missing dependency')\n", encoding="utf-8"
     )
+    registry = loader.load_plugin_registry(tmp_path)
+    assert not registry.has_plugin('test.autoload_broken')
+    assert registry.load_failures[0]['phase'] == 'import'
     with pytest.raises(RuntimeError, match="autoload_broken.*pyproject.toml.*missing dependency"):
-        loader.load_plugin_registry(tmp_path)
+        loader.load_plugin_registry(tmp_path, strict=True)
 
 
 def test_configured_directories_and_optional_runtime_manifest(tmp_path):
@@ -75,14 +91,16 @@ def test_configured_directories_and_optional_runtime_manifest(tmp_path):
     assert registry.runtime_requirements['test.autoload_runtime'] == ('numpy>=2',)
 
 
-def test_default_directory_is_independent_of_working_directory(tmp_path, monkeypatch):
+def test_default_and_configured_directories_are_independent_of_working_directory(tmp_path, monkeypatch):
+    codex = Path(__file__).resolve().parents[2] / "packs/codex"
     monkeypatch.chdir(tmp_path)
-    registry = loader.load_plugin_registry()
+    registry = loader.load_plugin_registry(plugin_directories=(codex,))
     agents = {node.id for node in registry.catalog().node_types if node.deck_id == "agents"}
     assert agents >= {"agent", "oaw.barracks", "openai.codex.agent"}
 
 
-def test_default_backend_publishes_codex_card_in_agents_deck(client):
+def test_explicit_codex_backend_publishes_codex_card_in_agents_deck(codex_client):
+    client = codex_client
     response = client.get("/api/catalog")
     assert response.status_code == 200
     card = next(item for item in response.json()["node_types"] if item["id"] == "openai.codex.agent")
@@ -107,8 +125,11 @@ def test_declared_dependencies_load_before_consumers_across_sources(tmp_path, mo
 def test_missing_or_cyclic_dependencies_report_owners(tmp_path, cycle):
     name = 'autoload_cycle' if cycle else 'autoload_missing'
     write_plugin(tmp_path, name, requires_plugins=('test.' + name if cycle else 'test.absent',))
-    with pytest.raises(RuntimeError, match='Missing or cyclic plugin dependencies: test.' + name):
-        loader.load_plugin_registry(tmp_path)
+    registry = loader.load_plugin_registry(tmp_path)
+    assert not registry.has_plugin('test.' + name)
+    assert registry.load_failures[0]['phase'] == 'dependency'
+    with pytest.raises(RuntimeError, match='test.' + name + '.*Missing or cyclic'):
+        loader.load_plugin_registry(tmp_path, strict=True)
 
 
 def test_direct_registration_checks_dependencies_before_registering():

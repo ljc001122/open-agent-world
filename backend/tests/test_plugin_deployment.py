@@ -59,57 +59,122 @@ def test_resource_results_projected_and_section_names_cannot_grant_builtin_acces
     assert calls == ["query"]
 
 
-def test_knowledge_project_bridge_needs_both_halves_published(monkeypatch):
-    """The deployment route for the knowledge base's model-projection bridge only
-    runs once a release grants both the read half (projection_prompt) and the write
-    half (save_projection) — either alone would let a release read without ever
-    writing, or write without the plugin ever building the prompt it validates."""
+def test_project_bridge_requires_prepare_prompt_save_and_failure_grants(monkeypatch):
+    import json
+    from types import SimpleNamespace
     calls = []
-    async def fake_run_projection(node_id, request, services):
-        calls.append((node_id, request.schema_id))
-        return {"projection": {"id": "projection-1"}, "truncated": False, "record_id": "record-1"}
-    monkeypatch.setattr("backend.deployment_workspace.run_projection", fake_run_projection)
-
-    body = {"schema_id": "schema-1", "model": "oaw:model:m1", "record_id": "record-1"}
-    both = DeploymentSurface(resource_actions={"projection_prompt": set(), "save_projection": set()}).model_dump(mode="json")
-    only_read = DeploymentSurface(resource_actions={"projection_prompt": set()}).model_dump(mode="json")
+    async def run(node_id, request, services, progress=None):
+        calls.append((node_id, request.space_id, request.project_ids, request.rerun))
+        assert request.model == "oaw:model:pinned"
+        return {"projections": [{"id": "result-1"}]}
+    monkeypatch.setattr("backend.deployment_workspace.run_project_space", run)
+    required = {"projection_prepare", "projection_prompt", "projection_save", "projection_fail"}
+    access = {"granted": DeploymentSurface(resource_actions={k: set() for k in required}).model_dump(mode="json")}
+    for missing in required:
+        access[missing] = DeploymentSurface(resource_actions={k: set() for k in required - {missing}}).model_dump(mode="json")
     app = FastAPI()
-    app.dependency_overrides[get_services] = lambda: None
-    app.include_router(workspace_router({"permissions": {}, "plugin_access": {
-        "granted": both, "half": only_read}}))
+    from types import SimpleNamespace
+    app.dependency_overrides[get_services] = lambda: SimpleNamespace(world=SimpleNamespace(
+        get_card=lambda node: SimpleNamespace(config={"default_model": "oaw:model:pinned"})))
+    app.include_router(workspace_router({"permissions": {}, "plugin_access": access}))
+    body = {"space_id": "space-1", "project_ids": ["project-1"], "model": "oaw:model:m1"}
     with TestClient(app) as client:
-        ok = client.post("/workspace/knowledge/granted/project", json=body)
+        ok = client.post("/workspace/knowledge/granted/project-space", json=body)
         assert ok.status_code == 200, ok.text
-        assert ok.json() == {"projection": {"id": "projection-1"}, "truncated": False, "record_id": "record-1"}
-        assert client.post("/workspace/knowledge/half/project", json=body).status_code == 404
-        assert client.post("/workspace/knowledge/unpublished/project", json=body).status_code == 404
-    assert calls == [("granted", "schema-1")]
+        assert json.loads(ok.text.splitlines()[-1])["result"] == {"projections": [{"id": "result-1"}]}
+        for missing in required | {"unpublished"}:
+            assert client.post(f"/workspace/knowledge/{missing}/project-space", json=body).status_code == 404
+        assert client.post("/workspace/knowledge/granted/knowledge", json={"draft_id": "old", "model": "m"}).status_code == 404
+    assert calls == [("granted", "space-1", ["project-1"], False)]
 
 
-def test_knowledge_assemble_bridge_needs_both_halves_published(monkeypatch):
-    """Same gate as projection, for the experiment-record merge bridge: a release
-    only reaches it once both experiment_assemble_prompt and experiment_save are
+def test_optional_projection_review_requires_read_and_revision_grants(monkeypatch):
+    calls = []
+    async def run(node_id, request, services, progress=None):
+        calls.append((node_id, request.projection_id, request.instruction))
+        assert request.model == "oaw:model:pinned"
+        return {"projection": {"id": "revision-2"}}
+    monkeypatch.setattr("backend.deployment_workspace.run_projection_review", run)
+    required = {"projection_review_prompt", "projection_revise"}
+    access = {"granted": DeploymentSurface(resource_actions={k: set() for k in required}).model_dump(mode="json")}
+    for missing in required:
+        access[missing] = DeploymentSurface(resource_actions={k: set() for k in required - {missing}}).model_dump(mode="json")
+    app = FastAPI()
+    from types import SimpleNamespace
+    app.dependency_overrides[get_services] = lambda: SimpleNamespace(world=SimpleNamespace(
+        get_card=lambda node: SimpleNamespace(config={"default_model": "oaw:model:pinned"})))
+    app.include_router(workspace_router({"permissions": {}, "plugin_access": access}))
+    body = {"projection_id": "result-1", "model": "oaw:model:m1", "instruction": "Normalize reported units"}
+    with TestClient(app) as client:
+        assert client.post("/workspace/knowledge/granted/review-projection", json=body).status_code == 200
+        for missing in required | {"unpublished"}:
+            assert client.post(f"/workspace/knowledge/{missing}/review-projection", json=body).status_code == 404
+    assert calls == [("granted", "result-1", "Normalize reported units")]
+
+
+def test_knowledge_extract_bridge_needs_both_halves_published(monkeypatch):
+    """Same gate, for the agent-free experiment extraction: a release
+    only reaches it once both experiment_extract_prompt and experiment_save are
     published for this node."""
+    from types import SimpleNamespace
     calls = []
-    async def fake_run_experiment_assemble(node_id, request, services):
-        calls.append((node_id, tuple(request.projection_ids)))
-        return {"record": {"id": "record-1", "status": "draft"}}
-    monkeypatch.setattr("backend.deployment_workspace.run_experiment_assemble",
-                        fake_run_experiment_assemble)
+    async def fake_run_experiment_extract(node_id, request, services):
+        calls.append((node_id, request.bundle_id, request.replace_drafts))
+        assert request.model == "oaw:model:pinned"
+        return {"records": [{"id": "record-1"}], "invalid": 0, "bundle_id": request.bundle_id, "truncated": False}
+    monkeypatch.setattr("backend.deployment_workspace.run_experiment_extract", fake_run_experiment_extract)
 
-    body = {"projection_ids": ["p1", "p2"], "model": "oaw:model:m1"}
+    body = {"bundle_id": "bundle-1", "model": "oaw:model:m1", "replace_drafts": True}
     both = DeploymentSurface(resource_actions={
-        "experiment_assemble_prompt": set(), "experiment_save": set()}).model_dump(mode="json")
-    only_read = DeploymentSurface(
-        resource_actions={"experiment_assemble_prompt": set()}).model_dump(mode="json")
+        "experiment_extract_prompt": set(), "experiment_save": set()}).model_dump(mode="json")
+    only_read = DeploymentSurface(resource_actions={"experiment_extract_prompt": set()}).model_dump(mode="json")
     app = FastAPI()
-    app.dependency_overrides[get_services] = lambda: None
+    app.dependency_overrides[get_services] = lambda: SimpleNamespace(world=SimpleNamespace(
+        get_card=lambda node: SimpleNamespace(config={"default_model": "oaw:model:pinned"})))
     app.include_router(workspace_router({"permissions": {}, "plugin_access": {
         "granted": both, "half": only_read}}))
     with TestClient(app) as client:
-        ok = client.post("/workspace/knowledge/granted/assemble", json=body)
+        ok = client.post("/workspace/knowledge/granted/extract", json=body)
         assert ok.status_code == 200, ok.text
-        assert ok.json() == {"record": {"id": "record-1", "status": "draft"}}
-        assert client.post("/workspace/knowledge/half/assemble", json=body).status_code == 404
-        assert client.post("/workspace/knowledge/unpublished/assemble", json=body).status_code == 404
-    assert calls == [("granted", ("p1", "p2"))]
+        assert ok.json()["records"] == [{"id": "record-1"}]
+        assert client.post("/workspace/knowledge/half/extract", json=body).status_code == 404
+        assert client.post("/workspace/knowledge/unpublished/extract", json=body).status_code == 404
+    assert calls == [("granted", "bundle-1", True)]
+
+
+def test_knowledge_bridge_streams_progress_then_the_result_or_the_error():
+    """The engineering routes answer as NDJSON so the card can show where a long
+    extraction is; the last line always carries the result or the failure."""
+    import json
+
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+
+    from backend.api.knowledge_bridge import _stream
+
+    app = FastAPI()
+
+    @app.post("/ok")
+    async def ok():
+        async def run(progress):
+            await progress({"stage": "read", "done": 0, "total": 2, "message": "first"})
+            await progress({"stage": "saved", "done": 1, "total": 2})
+            return {"sources": [{"entities": 3}]}
+        return _stream(run)
+
+    @app.post("/fail")
+    async def fail():
+        async def run(progress):
+            await progress({"stage": "findings", "done": 0, "total": 3})
+            raise HTTPException(422, "Nothing published yet")
+        return _stream(run)
+
+    with TestClient(app) as client:
+        response = client.post("/ok")
+        assert response.headers["content-type"].startswith("application/x-ndjson")
+        lines = [json.loads(line) for line in response.text.splitlines()]
+        assert lines == [{"event": "progress", "stage": "read", "done": 0, "total": 2, "message": "first"},
+                         {"event": "progress", "stage": "saved", "done": 1, "total": 2},
+                         {"event": "done", "result": {"sources": [{"entities": 3}]}}]
+        failed = [json.loads(line) for line in client.post("/fail").text.splitlines()]
+        assert failed[-1] == {"event": "error", "status": 422, "detail": "Nothing published yet"}

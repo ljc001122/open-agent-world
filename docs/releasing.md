@@ -1,15 +1,51 @@
 # Publishing desktop releases
 
-The **Desktop release** workflow builds Windows x64, macOS Apple Silicon and macOS Intel from the same commit. macOS packaging was integrated from `codex/macos-desktop-preview`; a separate branch is no longer needed for these builds.
+The **Desktop release** workflow builds Windows x64, macOS Apple Silicon and macOS Intel from the same commit.
 
-## First release
+## Prepare a release
 
-1. Commit the packaging/workflow/docs changes and merge them into `main` so the download instructions appear on the repository homepage and the manual workflow is discoverable.
-2. In **Actions → Desktop release → Run workflow**, select the release branch. This builds all three installers and uploads Actions artifacts without creating a Release.
-3. Download the artifacts and test installation, first launch, model configuration and upgrade on the corresponding operating systems. Payload self-tests do not replace installing the app on a clean machine.
-4. Ensure the version agrees in `desktop/package.json`, `desktop/package-lock.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml` and the application entry in `desktop/src-tauri/Cargo.lock`. Update `docs/release-notes.md` with the changes for this version.
-5. Tag that commit, for example `git tag v0.1.0`, then `git push origin v0.1.0`. The tag must equal `v` plus the desktop version. All three builds must pass before a draft Release is created with installers and individual SHA-256 checksums.
-6. Open **Releases**, edit the draft, check assets and notes, and click **Publish release**. Use **Set as a pre-release** for experimental builds. The README links to `/releases`, so preview releases are discoverable too.
+1. Prepare the version and `docs/release-notes.md` in a PR to `dev`. Use a new
+   version greater than previous releases; do not reuse a published tag.
+2. Keep the application version consistent in `frontend/package.json` and its
+   lockfile, `backend/pyproject.toml`, `backend/uv.lock`, `backend/__init__.py`,
+   `desktop/package.json` and its lockfile, `desktop/src-tauri/tauri.conf.json`,
+   `desktop/src-tauri/Cargo.toml` and its application entry in `Cargo.lock`.
+   Refresh locks with their package managers. Run `python scripts/check-release.py`.
+   Packaging verifies these committed values and never rewrites their versions.
+3. Promote `dev` to `main` through a merge PR for a stable release. Wait for
+   **Pull request checks**, **Documentation**, and **Desktop native checks** on
+   the resulting source SHA. Release gating requires the latest push/manual
+   run of each workflow to succeed; an earlier green run cannot hide a later
+   failure, cancellation, or pending run.
+4. Run **Desktop release** manually on that commit's branch to produce preview
+   installers. For a feature-branch preview, first manually run all three
+   validation workflows on that branch. Manual builds also verify the combined
+   artifact manifest and retain generated notes in `release-evidence`; they do
+   not create a Release.
+5. Test installation, first launch, model configuration, backup/restore and
+   upgrade on Windows x64 and both macOS architectures. Payload self-tests do
+   not replace installed-app acceptance.
+6. Tag the verified commit with `vX.Y.Z` and push only that tag. Stable tags must
+   be reachable from `main`; `vX.Y.Z-alpha.N`, `-beta.N`, or `-rc.N` tags must
+   be reachable from `dev`. Prerelease flags are set automatically from the tag.
+   All builders check out the verified SHA. Only after every build succeeds
+   does the workflow create/update a draft.
+7. Review the generated notes, `release-validation.json`, per-platform
+   provenance, `release-manifest.json`, installers, SHA-256 files and optional
+   updater files. The manifest binds versions, checks, source SHA and asset
+   hashes. Complete signing and installed-app requirements before manually
+   publishing the draft. No workflow publishes a formal Release automatically.
+8. Merge `main` back into `dev` through a PR after stable promotion, including
+   the promotion commit so subsequent release PRs remain up to date.
+
+### Version domains
+
+The OAW application version is separate from backend/frontend Plugin API major
+1, SDK package `@oaw/plugin-api@1.0.0`, and each Pack's own version.
+Do not bump SDK or Pack versions just to release OAW. Pack `compatibility.oaw`
+is checked against the backend runtime application version. Python uses
+`X.Y.ZaN`, `X.Y.ZbN`, or `X.Y.ZrcN` for the corresponding SemVer prerelease;
+the version checker enforces that equivalence.
 
 The workflow uses GitHub's automatic `GITHUB_TOKEN` with write permission only in the release job; no personal token is needed. Repository/organization policy must allow GitHub Actions and the job's `contents: write` permission. Pushing a tag through a workflow's `GITHUB_TOKEN` does not normally trigger another workflow; push the release tag from your authenticated Git client.
 
@@ -63,17 +99,15 @@ The **Desktop native checks** PR workflow runs Rust formatting and native tests 
 
 Run **Desktop release** manually on the PR branch to validate the real payload and installers. This does not create or publish a GitHub Release. Payload self-tests exercise the installed backup command and restore synthetic documents, a database and encrypted model credentials, including Windows DPAPI. macOS also runs this test from the bundled `.app` resource layout. These checks do not exercise native update dialogs or replace installing the app on a clean machine.
 
-The updater can be reviewed and merged while disabled by default. Ready for review means the code and preview build checks are complete; it does not mean the stable update channel is ready to enable. Keep the publication requirements below explicit rather than treating unavailable production credentials as a code-review prerequisite.
-
 ### Native acceptance before publication
 
 Before a signed public release:
 
 - Configure the Windows signing certificate and Apple Developer ID/notarization credentials listed above. Configure and securely retain the updater keypair only if automatic updates are wanted.
-- If Marketplace support is required, deploy and smoke-test it, bind its origin in `backend/official_marketplace.py`, and set `OAW_REQUIRE_MARKETPLACE=true`. Otherwise leave the constant as `None`; installers remain releasable with Store unavailable.
+- The official Marketplace origin is configured in `backend/official_marketplace.py`. Set the repository variable `OAW_REQUIRE_MARKETPLACE=true` for public releases that promise Store access. The gate checks the embedded HTTPS origin on pushed tags only; it does not probe service health. Before publication, repeat [official acceptance](pack-store.md#acceptance) with no endpoint override against the actual release payload and complete installed-app acceptance. Manual preview, signing and updater policies remain independent.
 - Build real signed installers, verify platform signatures/notarization, and complete the installed-app acceptance below.
 - Verify the stable manifest and asset URLs against the release assets before publishing them together.
 
-On Windows x64 and both macOS architectures, test a real installed version upgrading to a newer signed draft/release: check/download, cancel, corrupt-signature rejection, install/relaunch, saved model credentials and workspace, offline check, backup failure/disk full, and pending storage migration. Verify Authenticode on Windows and Gatekeeper/stapling on macOS. CI's signature checks do not replace these tests. macOS local Sandbox support remains a separate limitation.
+On Windows x64 and both macOS architectures, test a real installed version upgrading to a newer signed draft/release: check/download, cancel, corrupt-signature rejection, install/relaunch, saved model credentials and workspace, offline check, backup failure/disk full, and pending storage migration. Verify Authenticode on Windows and Gatekeeper/stapling on macOS. CI's signature checks do not replace these tests. Check each promised local Sandbox runtime separately using its [platform prerequisites](sandbox-workspace.md).
 
 GitHub Release downloads remain the public distribution channel. Actions artifacts are temporary build/test outputs.

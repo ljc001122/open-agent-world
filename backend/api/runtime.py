@@ -225,6 +225,22 @@ async def get_run(
     return services._require_run_manager().get_run(run_id)
 
 
+@router.get("/runs/{run_id}/activity")
+async def run_activity(run_id: str, offset: int = Query(default=0, ge=0),
+                       limit: int = Query(default=50, ge=1, le=100), latest: bool = False,
+                       services=Depends(get_services)):
+    from backend.runs.history import RunActivityHistory
+    services._require_run_manager().get_run(run_id)
+    return RunActivityHistory(services.database, run_id).page(offset, limit, latest=latest)
+
+
+@router.get("/runs/{run_id}/activity/{identity:path}")
+async def run_activity_detail(run_id: str, identity: str, services=Depends(get_services)):
+    from backend.runs.history import RunActivityHistory
+    services._require_run_manager().get_run(run_id)
+    return RunActivityHistory(services.database, run_id).get(identity)
+
+
 @router.get("/runs/{run_id}/reasoning")
 async def run_reasoning(run_id: str, offset: int = Query(default=0, ge=0),
                         limit: int = Query(default=50, ge=1, le=100), services=Depends(get_services)):
@@ -443,6 +459,33 @@ async def sandbox_files(sandbox_id: str, operation: str = "roots", root: str = "
             'Content-Length': str(result['size']), 'Content-Disposition': f"attachment; filename*=UTF-8''{quote(result['name'], safe='')}",
             'X-Content-Type-Options': 'nosniff'})
     return result
+
+
+class OpenSandboxFolderRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    root: str = Field(default='workspace', max_length=512)
+    path: str = Field(default='', max_length=4096)
+
+
+@router.post('/sandboxes/{sandbox_id}/files/open-folder')
+async def open_sandbox_folder(sandbox_id: str, body: OpenSandboxFolderRequest, request: Request, services=Depends(get_services)):
+    import asyncio
+    from backend.api.desktop import _require_local_desktop
+    from backend.desktop_folders import open_folder
+    _require_local_desktop(request)
+    async with services._node_mutation(read_only=True):
+        services._require_card_type(sandbox_id, 'sandbox')
+        try:
+            location = await services._require_sandbox_backend().file_operation(
+                sandbox_id, 'desktop_location', root=body.root, path=body.path)
+            await asyncio.to_thread(open_folder, location['path'])
+        except FileNotFoundError as exc:
+            raise SandboxValidationError('The file or folder no longer exists. Refresh the file list and try again.') from exc
+        except PermissionError as exc:
+            raise SandboxValidationError('The system denied access to this folder. Check its permissions on this computer.') from exc
+        except OSError as exc:
+            raise SandboxValidationError('The system file manager could not open this folder. Check that it is available on this computer.') from exc
+    return {'opened': True}
 
 
 @router.post("/sandboxes/{sandbox_id}/files", status_code=201)

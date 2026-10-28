@@ -55,6 +55,30 @@ def _sections(text):
         yield path, current
 
 
+def outline(text):
+    """``[{index, heading_path, offset, length}]`` — the document's sections as
+    character windows, so a reader can take one section at a time. The heading line
+    belongs to the section it opens, as in ``_sections``; text before the first
+    heading is section 0 with an empty path."""
+    stack: list[tuple[int, str]] = []
+    sections: list[dict] = []
+    path, start, offset = "", 0, 0
+    for line in text.splitlines(keepends=True):
+        match = _HEADING_RE.match(line)
+        if match:
+            if offset > start:
+                sections.append({"index": len(sections), "heading_path": path, "offset": start,
+                                 "length": offset - start})
+            level = len(match.group(1))
+            stack = [item for item in stack if item[0] < level]
+            stack.append((level, match.group(2).strip()))
+            path, start = " > ".join(title for _, title in stack), offset
+        offset += len(line)
+    if offset > start:
+        sections.append({"index": len(sections), "heading_path": path, "offset": start, "length": offset - start})
+    return sections
+
+
 def chunk_markdown(text):
     """Yield ``(chunk_index, heading_path, chunk_text)`` for one document.
 
@@ -117,11 +141,13 @@ def _match_expression(query):
     return " OR ".join('"{}"'.format(token.replace('"', '""')) for token in tokens)
 
 
-def search(engine, query, *, limit=8, group_id=None):
+def search(engine, query, *, limit=8, group_id=None, source_ids=None):
     """Ranked chunks matching ``query``, newest-ranked first. ``[]`` for an empty query."""
     ensure_schema(engine)
     match = _match_expression(query)
     if not match:
+        return []
+    if source_ids is not None and not source_ids:
         return []
     sql = (f"SELECT text, heading_path, record_id, source_id, group_id, chunk_index, "
            f"bm25({TABLE}) AS rank FROM {TABLE} WHERE {TABLE} MATCH ?")
@@ -129,6 +155,9 @@ def search(engine, query, *, limit=8, group_id=None):
     if group_id:
         sql += " AND group_id = ?"
         params.append(str(group_id))
+    if source_ids is not None:
+        sql += " AND source_id IN (" + ",".join("?" for _ in source_ids) + ")"
+        params.extend(str(identifier) for identifier in source_ids)
     sql += " ORDER BY rank LIMIT ?"
     params.append(max(1, min(int(limit), 50)))
     with engine.connect() as connection:
