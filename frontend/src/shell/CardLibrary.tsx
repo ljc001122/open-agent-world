@@ -1,11 +1,9 @@
 import { reportInteraction } from '../state/interactions';
-import { CardFace, CardStock } from "../components/CardFace";
 import { useMotionPresence } from './useMotionPresence';
 import { finishLabel } from "../cards/cardFinish";
 import { t, useLocale } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { Archive, CalendarDays, Check, ChevronRight, Layers3, LibraryBig, Minus, Plus, Search, Store, Tag, X } from "lucide-react";
-import { CatalogIcon } from "../components/CatalogIcon";
 import { useCardLibrary, type DeckEntry } from "../state/cardLibrary";
 import { useWorldStore } from "../state/worldStore";
 import { collectionDependencies, ensureCardsCollected } from "../state/cardDependencies";
@@ -19,7 +17,7 @@ import type { PackInstallations } from "../types/packs";
 import { PackStore } from "./PackStore";
 import { PackCreator } from "./PackCreator";
 import { PackOperations } from './PackOperations';
-import { LibraryCard as PhysicalLibraryCard, LibraryCardPreview } from "./LibraryCard";
+import { LibraryCard as PhysicalLibraryCard, LibraryCardSurface } from "./LibraryCard";
 import "./cardLibrary.css";
 import { startPalettePointerDrag } from "../palette/pointerDrag";
 import { isHosted } from '../auth/hostedSession';
@@ -159,8 +157,8 @@ export function CardLibrary() {
         }} data-library-card={item.id} onClick={event => {
           if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; return; }
           setSelected(item);
-        }} aria-label={t("Inspect {v0}", { v0: String(item.label) })} aria-description={item.description} title={item.description}><CardStock finish={item.finish} data-deck-visual className="library-card-stock"><CardFace definition={item.definition} icon={item.kind === "legion" ? <Layers3 /> : <CatalogIcon definition={item.definition} />} label={item.label} description={item.description} />
-        {!item.available && !item.internal ? <span className="library-unavailable">{t("Unavailable")}</span> : null}</CardStock></button>
+        }} aria-label={t("Inspect {v0}", { v0: String(item.label) })} aria-description={item.description} title={item.description}><LibraryCardSurface card={item} data-deck-visual className="library-card-stock">
+        {!item.available && !item.internal ? <span className="library-unavailable">{t("Unavailable")}</span> : null}</LibraryCardSurface></button>
       {item.internal && !included ? <div className="library-card-usage">{item.owners.length ? t("Use through its container") : t("Created by a world action")}</div> :
         <button className={`library-card-add ${included ? "is-in-deck" : ""}`} disabled={library.busy || !deck || (!included && !item.available)} onClick={() => toggleCard(item)} aria-label={t(included ? 'Remove {v0} from deck' : 'Add {v0} to deck', { v0: item.label })}>
           {included ? <Check size={14} /> : <Plus size={14} />}{included ? t("In {deck} · Remove", { deck: displayDeckName(deck!) }) : t("Add to current deck")}</button>}
@@ -234,7 +232,7 @@ export function CardLibrary() {
             </details>)}
             {!filtered.length ? <div className="library-empty"><LibraryBig size={30} /><strong>{allCards.length ? t("No matching cards") : t("Your collection starts with a pack")}</strong><p>{!showInternal && internalCount ? t("{v0} matching internal cards are hidden. Show internal cards to inspect their purpose and container.", { v0: String(internalCount) }) : allCards.length ? t("Try another search, source pack or category.") : t("Visit Packs and open one to discover its cards.")}</p><button className="secondary-button" onClick={() => { if (!showInternal && internalCount) setShowInternal(true); else { setTab("packs"); setQuery(""); } }}>{!showInternal && internalCount ? t("Show internal cards") : t("Browse packs")}</button></div> : null}
           </div><div ref={detailSidebar} className="library-card-sidebar"><aside className="library-card-detail" aria-label={t("Card details")}>{detail ? <>
-            <div className="library-detail-stage">{detail.kind === "legion" && !detail.artworkUrl ? <span className="library-detail-formation"><Layers3 size={44} aria-hidden="true" /></span> : <LibraryCardPreview key={detail.id} card={detail} />}</div>
+            <div className="library-detail-stage"><LibraryCardSurface key={`${detail.kind}:${detail.id}`} card={detail} className="library-card-preview" size="standard" quality="showcase" /></div>
             <div className="library-detail-content">
             <header className="library-detail-heading">
               <div className="library-detail-tags"><span className="library-detail-category"><Tag size={11} aria-hidden="true" />{t(detail.category)}</span>

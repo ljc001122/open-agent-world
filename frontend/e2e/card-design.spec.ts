@@ -22,7 +22,7 @@ test('design presets stay readable across materials, themes and thumbnail sizes'
   await expect(cards.locator('.card-finish-layer')).toHaveCount(0);
   await page.getByRole('button', { name: '深色主题' }).click();
   await page.getByLabel('缩略卡').check();
-  await expect(cards.first().locator('.card-face-copy small')).toBeHidden();
+  await expect(cards.nth(3).locator('.card-face-copy small')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('card-design-thumbnails.png'), fullPage: true });
   await page.getByLabel('缩略卡').uncheck();
   await page.setViewportSize({ width: 390, height: 844 });

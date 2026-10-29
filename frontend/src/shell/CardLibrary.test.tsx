@@ -314,20 +314,42 @@ it("keeps the collected finish across library, detail and deck rerenders with no
   expect(screen.getByText("Rainbow", { selector: ".library-finish-metadata" })).toBeTruthy();
 });
 
-it("shows preset artwork in the grouped collection detail stage", () => {
+it("shares preset covers, failed-cover fallback and replacement artwork across collection, detail and deck", () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   const state = packSnapshot();
   const artwork = '/api/plugins/xrd/assets/workbench-cover.svg';
   state.packs.alpha.definition.artwork_url = artwork;
   state.preset_pack_ids = { workbench: ['alpha'] };
+  state.decks[0].entries = [{ kind: 'legion', id: 'workbench' }];
   openCards(state);
   act(() => useWorldStore.setState({ legions: [{ id: 'workbench', name: 'XRD workbench', preset: true,
     node_count: 2, edge_count: 1, bounds: { width: 600, height: 400 }, node_types: ['card.1'],
     plugin_ids: [TEST_CATALOG.plugins[0].id], compatible: true, issues: [], revision: 1 }] }));
   fireEvent.change(screen.getByLabelText('Source pack'), { target: { value: 'pack:alpha' } });
   fireEvent.click(screen.getByRole('button', { name: 'Inspect XRD workbench' }));
+  render(<ComponentPalette />);
   const cover = within(screen.getByRole('complementary', { name: 'Card details' })).getByRole('img', { name: 'XRD workbench' });
   expect(cover.getAttribute('src')).toBe(artwork);
   expect(cover.closest('.library-detail-stage')).not.toBeNull();
+  const covers = screen.getAllByRole('img', { name: 'XRD workbench' });
+  expect(covers).toHaveLength(3);
+  for (const image of covers) {
+    expect(image.getAttribute('src')).toBe(artwork);
+    expect(image.parentElement?.querySelector('.card-face')).toBeNull();
+    fireEvent.error(image);
+  }
+  const faces = document.querySelectorAll('[data-library-card="workbench"] .card-face, .library-card-preview .card-face, [data-palette-card="workbench"] .card-face');
+  expect(faces).toHaveLength(3);
+  for (const face of faces) {
+    expect(face.querySelector('.lucide-layers')).toBeTruthy();
+    expect(face.innerHTML).toBe(faces[0].innerHTML);
+  }
+  const replacement = structuredClone(state);
+  replacement.packs.alpha.definition.artwork_url = '/replacement-cover.svg';
+  act(() => useCardLibrary.setState({ snapshot: replacement }));
+  const replaced = screen.getAllByRole('img', { name: 'XRD workbench' });
+  expect(replaced).toHaveLength(3);
+  for (const image of replaced) expect(image.getAttribute('src')).toBe('/replacement-cover.svg');
 });
 
 it("keeps complete source groups together, including packs larger than the former page limit", () => {

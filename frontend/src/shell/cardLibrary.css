@@ -58,7 +58,7 @@
 .library-card-detail > * { flex-shrink: 0; max-width: 100%; }
 .library-card-detail h3, .library-card-detail p { margin: 0; }
 .library-card-detail p { color: var(--ink-soft); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.library-card-detail small { font-size: 10px; color: var(--ink-faint); }
+.library-detail-content small { font-size: 10px; color: var(--ink-faint); }
 .library-card-detail .library-unavailable { color: var(--warning); }
 .library-detail-stage { display: grid; place-items: center; padding: 24px 18px; border-bottom: 1px solid var(--line); background: radial-gradient(ellipse at 50% 35%, var(--highlight), transparent 75%), var(--surface-soft); }
 .library-detail-formation { display: grid; place-items: center; width: 88px; aspect-ratio: 1; border: 1px solid var(--line); border-radius: 24px; background: var(--surface-raised); color: var(--accent-strong); box-shadow: 0 8px 20px var(--shadow); }
@@ -90,7 +90,6 @@
 .library-detail-empty { display: flex; grid-column: 1 / -1; min-width: 0; min-height: 300px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px 20px; text-align: center; }
 .library-detail-empty > .library-detail-formation { width: 64px; border-radius: 20px; margin-bottom: 6px; }
 .library-card-preview.card-stock { width: min(100%, clamp(112px, 46cqh, 184px)); height: auto; min-height: 0; aspect-ratio: 5 / 7; align-self: center; padding: 0; margin: 0; }
-.library-card-preview .card-face { height: auto; min-height: 100%; }
 .library-dependencies { min-width: 0; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .library-dependencies h4 { margin: 0; font-size: 11px; }
 .library-dependencies ul { padding-left: 18px; }
@@ -148,10 +147,6 @@ body.is-palette-dragging .component-palette.is-library-open .deck-stage { min-he
   .library-detail-category, .library-finish-metadata { padding: 3px 6px; font-size: 9px; }
   .library-detail-heading h3 { font-size: 17px; }
   .library-card-preview.card-stock { width: 100%; }
-  .library-card-preview .card-face { --face-pad: 8px; }
-  .library-card-preview .card-face-copy strong { font-size: 11px; }
-  .library-card-preview .card-face-copy small { font-size: 8px; -webkit-line-clamp: 1; }
-  .library-card-preview .card-face-symbol { width: 32px; --face-symbol: 20px; }
 }
 @media (max-height: 700px) {
   .library-body { padding-block: 12px; }
@@ -205,5 +200,3 @@ body.is-palette-dragging .component-palette.is-library-open .deck-stage { min-he
 .library-developer-tools { flex-shrink:0; padding:10px 24px; border-top:1px solid var(--line); color:var(--ink-faint); font-size:12px; }
 .library-developer-tools summary { cursor:pointer; }
 .library-developer-tools .library-text-button { margin-top:8px; }
-
-.library-formation-cover { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 14px; }
