@@ -18,7 +18,45 @@ async function runtime(page: Page) {
   await expect(page.locator('.world-canvas')).toHaveCount(0);
 }
 
-test('hosted accounts isolate runtime data, invalidate other tabs and share authentication with the canvas', async ({ page, context, browser }) => {
+test('keeps the workspace and its draft mounted through network failures and reconnects without navigation', async ({ page, context }, testInfo) => {
+  await page.clock.install();
+  await login(page, 'alice');
+  await runtime(page);
+  await page.getByRole('tab', { name: 'Tasks', exact: true }).click();
+  const draft = page.getByLabel('New task title');
+  await draft.fill('Unsubmitted draft survives reconnect');
+  const input = await draft.elementHandle();
+  let failure: 'network' | 'server' | undefined = 'network';
+  let checks = 0;
+  await page.route('**/auth/me', route => {
+    checks++;
+    return failure === 'network' ? route.abort('internetdisconnected')
+      : failure === 'server' ? route.fulfill({ status: 503, body: 'Temporarily unavailable' }) : route.continue();
+  });
+  let navigations = 0;
+  page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
+  await page.clock.fastForward(15_000);
+  const notice = page.locator('.backend-unavailable');
+  await expect(notice).toContainText('Reconnecting automatically');
+  await expect(draft).toHaveValue('Unsubmitted draft survives reconnect');
+  await expect(page.locator('#oaw-auth-shield')).toHaveCount(0);
+  failure = 'server';
+  await notice.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect.poll(() => checks).toBeGreaterThanOrEqual(2);
+  await expect(notice).toBeVisible();
+  await context.setOffline(true);
+  await expect(notice).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('hosting-reconnecting.png'), fullPage: true });
+  failure = undefined;
+  await context.setOffline(false);
+  await expect(notice).toHaveCount(0);
+  expect(await input!.evaluate(element => element.isConnected)).toBe(true);
+  await expect(draft).toHaveValue('Unsubmitted draft survives reconnect');
+  expect(navigations).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath('hosting-recovered.png'), fullPage: true });
+});
+
+test('hosted accounts isolate runtime data, invalidate other tabs and share authentication with the canvas', async ({ page, context, browser }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const bobContext = await browser.newContext({ locale: 'en-US', viewport: { width: 1400, height: 900 } });
@@ -99,10 +137,10 @@ test('hosted accounts isolate runtime data, invalidate other tabs and share auth
     await expect(page.getByRole('button', { name: 'Store', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Close Library', exact: true }).click();
     await expect(page.locator('.card-library-modal')).not.toBeVisible();
-    await page.screenshot({ path: '../.tmp/hosting-canvas.png', fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('hosting-canvas.png'), fullPage: true });
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
-    await page.screenshot({ path: '../.tmp/hosting-login.png', fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('hosting-login.png'), fullPage: true });
     expect(errors).toEqual([]);
   } finally { await bobContext.close(); }
 });
