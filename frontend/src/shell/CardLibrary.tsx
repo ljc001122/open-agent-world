@@ -18,6 +18,7 @@ import { PackStore } from "./PackStore";
 import { PackCreator } from "./PackCreator";
 import { PackOperations } from './PackOperations';
 import { LibraryCard as PhysicalLibraryCard, LibraryCardSurface } from "./LibraryCard";
+import { LibraryCardGroups } from './LibraryCardGroups';
 import "./cardLibrary.css";
 import { startPalettePointerDrag } from "../palette/pointerDrag";
 import { isHosted } from '../auth/hostedSession';
@@ -224,12 +225,7 @@ export function CardLibrary() {
               onClick={() => void library.edit({ action: "set_plugin_enabled", id: sourcePack.definition.plugin_id, enabled: !sourcePlugin.enabled })}>{sourcePlugin.enabled ? t("Disable Pack") : t("Enable Pack")}</button> : null}
           </div> : null}
           {sourceIssues.map((failure, index) => <p key={index} className="pack-action-error" role="alert">{failure.error}</p>)}
-            {groups.map(({ source, items }) => <details key={JSON.stringify([source.id, query, filter, sourceFilter, showInternal])} className="library-source-group"
-              open={Boolean(sourceFilter || query.trim() || filter || showInternal || sources.length === 1)}>
-              <summary><Archive size={18} /><h4>{source.name}</h4><span>{items.length} {t(items.length === 1 ? "card" : "cards")}</span><ChevronRight className="library-group-chevron" size={16} /></summary>
-              {items.some(item => !item.internal) ? <div className="library-card-grid">{items.filter(item => !item.internal).map(renderCard)}</div> : null}
-              {items.some(item => item.internal) ? <div className="library-internal-cards"><p>{t("Internal cards · Created through containers or world actions")}</p><div className="library-card-grid">{items.filter(item => item.internal).map(renderCard)}</div></div> : null}
-            </details>)}
+            {groups.length > 0 && <LibraryCardGroups key={JSON.stringify([query, filter, sourceFilter, showInternal])} groups={groups} renderCard={renderCard} />}
             {!filtered.length ? <div className="library-empty"><LibraryBig size={30} /><strong>{allCards.length ? t("No matching cards") : t("Your collection starts with a pack")}</strong><p>{!showInternal && internalCount ? t("{v0} matching internal cards are hidden. Show internal cards to inspect their purpose and container.", { v0: String(internalCount) }) : allCards.length ? t("Try another search, source pack or category.") : t("Visit Packs and open one to discover its cards.")}</p><button className="secondary-button" onClick={() => { if (!showInternal && internalCount) setShowInternal(true); else { setTab("packs"); setQuery(""); } }}>{!showInternal && internalCount ? t("Show internal cards") : t("Browse packs")}</button></div> : null}
           </div><div ref={detailSidebar} className="library-card-sidebar"><aside className="library-card-detail" aria-label={t("Card details")}>{detail ? <>
             <div className="library-detail-stage"><LibraryCardSurface key={`${detail.kind}:${detail.id}`} card={detail} className="library-card-preview" size="standard" quality="showcase" /></div>

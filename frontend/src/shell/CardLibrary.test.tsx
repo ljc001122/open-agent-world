@@ -361,11 +361,13 @@ it("keeps complete source groups together, including packs larger than the forme
   }
   openCards(state);
   for (const [name, count] of [["Alpha pack", 28], ["Beta pack", 47]] as const) {
-    const group = screen.getByRole("heading", { name }).closest("details")!;
-    expect(group.open).toBe(false);
-    group.open = true;
-    expect(within(group).getByText(`${count} cards`)).toBeTruthy();
+    const group = screen.getByRole("group", { name });
     expect(within(group).getAllByRole("button", { name: /^Inspect Tool/ })).toHaveLength(count);
+    fireEvent.click(within(group).getByRole('button', { name: `Collapse ${name}` }));
+    expect(within(group).queryByRole('button', { name: /^Inspect Tool/ })).toBeNull();
+    expect(within(group).getByText(`${count} cards`)).toBeTruthy();
+    fireEvent.click(within(group).getByRole('button', { name: `Expand ${name}` }));
+    expect(within(group).getAllByRole('button', { name: /^Inspect Tool/ })).toHaveLength(count);
   }
   expect(screen.queryByLabelText("Next cards")).toBeNull();
   fireEvent.change(screen.getByLabelText("Source pack"), { target: { value: "pack:beta" } });
@@ -432,12 +434,8 @@ it("groups by collected pack provenance, deduplicates shared cards and filters b
   openCards(state);
   expect(screen.getByRole("heading", { name: "Alpha pack" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Beta pack" })).toBeTruthy();
-  expect(screen.getByRole("heading", { name: "Alpha pack" }).closest("details")?.hasAttribute("open")).toBe(false);
-  for (const name of ["Alpha pack", "Beta pack"]) {
-    const summary = screen.getByRole("heading", { name }).closest("summary")!;
-    expect(summary.querySelector("small")).toBeNull();
-    fireEvent.click(summary);
-  }
+  expect(screen.queryByRole('button', { name: 'Collapse Alpha pack' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Collapse Beta pack' })).toBeNull();
   expect(screen.getAllByRole("button", { name: "Inspect Review toolbox" })).toHaveLength(1);
   expect(screen.getAllByRole("button", { name: /^Inspect / })).toHaveLength(2);
   fireEvent.change(screen.getByLabelText("Source pack"), { target: { value: "pack:beta" } });
@@ -448,6 +446,18 @@ it("groups by collected pack provenance, deduplicates shared cards and filters b
   fireEvent.change(screen.getByLabelText("Card category"), { target: { value: "Even" } });
   expect(screen.getByText("No matching cards")).toBeTruthy();
   expect(screen.getByText(/1 matching internal cards are hidden/)).toBeTruthy();
+});
+
+it('keeps single-card groups open and exposes matches inside a previously folded group', () => {
+  const state = packSnapshot();
+  state.card_definitions['card.2'].user_creatable = true;
+  openCards(state);
+  expect(screen.queryByRole('button', { name: 'Collapse Beta pack' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse Alpha pack' }));
+  expect(screen.queryByRole('button', { name: 'Inspect Review toolbox · Skill' })).toBeNull();
+  fireEvent.change(screen.getByLabelText('Search cards'), { target: { value: 'Review toolbox · Skill' } });
+  expect(screen.getByRole('button', { name: 'Inspect Review toolbox · Skill' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^(Expand|Collapse) Alpha pack$/ })).toBeNull();
 });
 
 it("identifies internal cards by their exact container, retains descriptions and leads to the usable card", () => {
