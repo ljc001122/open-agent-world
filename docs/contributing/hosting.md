@@ -68,6 +68,12 @@ receives a stable internal UUID.
 
 ### Open a published Workspace after login
 
+A release can include several Legion workspaces. Select them and set their order
+in **Publish application**; the first workspace opens after login. The title menu
+only lists published workspaces. Template export and per-user provisioning preserve
+this order and remap each workspace's layout to the new user's cards.
+The existing template size limit of 101 nodes applies to the combined selection.
+
 Publish a Legion in an engineering workspace, stop that backend, then export a template:
 
 ```bash

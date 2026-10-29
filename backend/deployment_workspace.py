@@ -11,6 +11,7 @@ from backend.api.knowledge_bridge import (
 from backend.node_documents import DocumentActionRequest, read_document, invoke_document_action
 from backend.node_resources import ResourceActionRequest, invoke_resource_action
 from backend.plugins.deployment import project_document
+from backend.deployments import published_workspaces
 
 
 def frontend_catalog(manifest, services, catalog=None):
@@ -47,6 +48,8 @@ def frontend_catalog(manifest, services, catalog=None):
 
 
 def workspace_snapshot(manifest, services):
+    workspaces = published_workspaces(manifest)
+    parents = {node_id: workspace["legion_id"] for workspace in workspaces for node_id in workspace["permissions"]}
     cards = []
     types = set()
     hidden = []
@@ -63,7 +66,7 @@ def workspace_snapshot(manifest, services):
             plugin_types.add(card.type)
             config = {key: value for key, value in card.config.items() if key in access["config_fields"]}
         cards.append({"id": card.id, "type": card.type, "name": card.name, "status": card.status,
-                      "parent_id": manifest["legion_id"], "config": config, "state_scope": card.state_scope,
+                      "parent_id": parents[node_id], "config": config, "state_scope": card.state_scope,
                       "finish": card.finish})
         sections = {"conversation": ("sessions", "conversation", "participants"),
                     "sandbox": ("files", "preview", "terminal")}.get(card.type, ())
@@ -78,8 +81,13 @@ def workspace_snapshot(manifest, services):
         if definition["id"] in plugin_types:
             node = services.plugins.node_type(definition["id"])
             definition["frontend"] = {key: value for key, value in node.frontend.items() if key in {"body", "workspace"}}
-    layout = deepcopy(manifest["layout"])
-    layout["hidden_sections"] = hidden + layout.get("hidden_sections", [])
+    legions = []
+    for workspace in workspaces:
+        layout = deepcopy(workspace["layout"])
+        layout["hidden_sections"] = [view for view in hidden if view["card_id"] in workspace["permissions"]] + layout.get("hidden_sections", [])
+        legions.append({"id": workspace["legion_id"], "name": workspace["name"] if len(workspaces) > 1 else manifest["name"], "type": "legion",
+                        "finish": services.world.get_card(workspace["legion_id"]).finish,
+                        "config": {"workspace_layout": layout}})
     # File following needs its actual connection, not an inferred relationship.
     # No hidden node or unrelated engineering edge enters the browser world.
     edges = []
@@ -91,9 +99,7 @@ def workspace_snapshot(manifest, services):
                     and edge.direction in {"forward", "bidirectional"}
                     and {"files", "preview", "conversation"}.intersection(manifest["permissions"].get(edge.target, []))):
                 edges.append({key: getattr(edge, key) for key in ("id", "source", "target", "relationship", "direction")})
-    return {"cards": cards, "edges": edges, "plugin_access": manifest.get("plugin_access", {}), "legion": {"id": manifest["legion_id"], "name": manifest["name"],
-            "type": "legion", "finish": services.world.get_card(manifest["legion_id"]).finish,
-            "config": {"workspace_layout": layout}},
+    return {"cards": cards, "edges": edges, "plugin_access": manifest.get("plugin_access", {}), "legion": legions[0], "legions": legions,
             "catalog": {"node_types": definitions, "relationships": [], "packs": [],
                         **frontend_catalog(manifest, services, catalog)}}
 
