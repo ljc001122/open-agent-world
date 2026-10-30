@@ -7,7 +7,7 @@ required. Any Agent with the appropriate live connections can use the toolbox.
 
 ## First use
 
-1. Install `oaw.office-0.1.0.oawpack` from Library → Packs, then restart OAW.
+1. Install `theafish.office-0.1.0.oawpack` from Library → Packs, then restart OAW.
 2. Open **Office Workbench** from this Pack in the Library. Choose your normal
    model connection for its Agent, and configure an available Sandbox runtime.
 3. Start the Sandbox. First execution prepares the selected skill's Python
