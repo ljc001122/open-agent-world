@@ -155,12 +155,16 @@ def command_in_profile(arguments, python, environment):
     return [executable, *arguments[1:]]
 
 
+def verify_imports(python, recipe, environment):
+    probe = "import importlib,json,sys;[importlib.import_module(name) for name in json.loads(sys.argv[1])]"
+    run([python, "-I", "-c", probe, json.dumps(recipe["verify_imports"])], env=environment)
+
+
 def verify(generation, recipe, environment):
     python, env = private_environment(generation, environment)
     if not python.is_file():
         raise RuntimeError("Sandbox profile interpreter is missing")
-    probe = "import importlib,json,sys;[importlib.import_module(name) for name in json.loads(sys.argv[1])]"
-    run([python, "-I", "-c", probe, json.dumps(recipe["verify_imports"])], env=env)
+    verify_imports(python, recipe, env)
     if recipe["node"]:
         run([*npm_command(), "ls", "--prefix", generation / "node", "--depth=0", "--json"], env=env, capture=True)
     return python, env
@@ -370,6 +374,9 @@ def execute(recipe, package):
         # This process was launched through SharedPythonRuntime.command.
         # Restart its interpreter without -S so its prepared packages load.
         python, environment = Path(sys.executable), clean_environment()
+        # The interpreter can survive a failed dependency installation. Check
+        # the declared imports before starting the requested command/Skill.
+        verify_imports(python, recipe, environment)
     else:
         python, environment = prepare(recipe)
     if recipe['mode'] == 'command':

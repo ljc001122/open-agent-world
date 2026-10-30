@@ -18,7 +18,10 @@ def _python_environment_summary(status):
     if not isinstance(status, dict):
         return None
     packages = status.get("package_versions") or {}
-    return {"ready": status.get("ready"), "preparing": status.get("preparing", False),
+    dependencies = status.get("dependencies") or {}
+    return {"ready": bool(status.get("ready") and dependencies.get("ready", True) and not status.get("warmup_error")),
+        "interpreter_ready": status.get("ready"), "dependencies": dependencies,
+        "preparing": status.get("preparing", False) or dependencies.get("state") == "preparing",
         "python_version": status.get("python_version"),
         "package_versions": {name: packages[name] for name in ("numpy", "ase", "scipy", "pymatgen", "matplotlib")
                              if name in packages},

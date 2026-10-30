@@ -3490,7 +3490,17 @@ class ApplicationServices:
         await self.ensure_sandbox_running(sandbox_id, agent_id=agent_id)
         if agent_id is not None:
             self.capabilities.require_sandbox_execute(agent_id, sandbox_id)
-        return await backend.install_python_packages(sandbox_id, requirements)
+        result = await backend.install_python_packages(sandbox_id, requirements)
+        # Reconcile the same durable Pack bootstrap receipts after a successful
+        # explicit retry. Its existing resolver reuses installed packages.
+        self.plugin_bootstrap.enqueue()
+        await asyncio.shield(self.plugin_bootstrap.task)
+        status = await backend.python_status(sandbox_id)
+        if isinstance(status, dict) and not status.get('dependencies', {}).get('ready', True):
+            from backend.sandbox.models import SandboxPreparationError
+            raise SandboxPreparationError(status['dependencies'].get('error') or 'Shared Pack preparation is incomplete')
+        from backend.capabilities.provider import _python_environment_summary
+        return {**result, 'python_environment': _python_environment_summary(status)}
 
     async def publish_sandbox_event(self, event: SandboxEvent) -> None:
         # Service receipts own admission/completion; native events may arrive
@@ -4270,6 +4280,7 @@ def create_services(
         services.sandbox_backend if isinstance(services.sandbox_backend, SandboxManager) else None)
     if isinstance(services.sandbox_backend, SandboxManager):
         services.sandbox_backend.pack_requirements = services.plugin_bootstrap.requirements
+        services.sandbox_backend.pack_python_status = services.plugin_bootstrap.status
     from backend.packs.installation import PackInstallationManager
     services.pack_installations = PackInstallationManager(settings.data_root, plugin_registry)
     with startup_stage("reconcile Pack resources"):

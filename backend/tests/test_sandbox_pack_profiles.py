@@ -155,6 +155,17 @@ def test_real_shared_commands_and_skills_reuse_prepared_environment_across_sandb
             value = json.loads(result.stdout)
             assert value == [42, str(shared.venv), [identity]]
         assert not (sandbox / ".oaw/pack-environments").exists()
+    # A usable interpreter alone is insufficient: a missing declared import
+    # must prevent even an otherwise valid user command from running.
+    (site / "shared_probe.py").unlink()
+    argv, mount = pack_profiles.bind_command_profiles(plugins, (requirement(),),
+        ["python3", "-c", "from pathlib import Path;Path('command-started').touch()"])
+    root = materialize_bundle(sandbox, mount.bundle)
+    failed = subprocess.run(shared.command(mount.command(argv, root)), cwd=sandbox, env=environment,
+                            capture_output=True, text=True)
+    assert failed.returncode == 1 and "shared_probe" in failed.stderr
+    assert not (sandbox / "command-started").exists()
+    assert not (sandbox / ".oaw/pack-environments").exists()
 
 
 def execute_fixture(tmp_path, *, requirements=(), imports=()):
