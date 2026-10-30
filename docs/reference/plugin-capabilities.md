@@ -123,7 +123,7 @@ when needed). Register a distinct node type with its own Pydantic configuration.
 Catalog entries expose `config_schema`; the `ui.schema-agent.v1` trait selects
 schema-driven scalar settings in the standard Agent workspace. Constant fields
 are not editable. `AgentInfo.details` carries JSON-compatible, non-secret runtime
-inspection data. See the [Codex plugin](../../plugins/codex/README.md).
+inspection data. See the [Codex plugin](../../packs/codex/README.md).
 
 Agent-engine integrations implement the public `RuntimeProvider` contract and
 register a factory:

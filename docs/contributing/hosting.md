@@ -10,6 +10,12 @@ instance per account. It has no public registration, shared workspaces across us
 autoscaling or automatic release upgrades. Administrators manage accounts through
 the server CLI; there is no browser administration API.
 
+Password sign-ins persist for 24 hours in a server-backed HttpOnly cookie, including
+across browser and gateway restarts. OIDC sessions remain bounded by the identity
+provider's expiry. Temporary network failures keep the workspace open and retry
+automatically; confirmed expiry, revocation or account changes require signing in
+again. Returning to a regular browser tab verifies the account in the background.
+
 ## Prepare the installation
 
 Use Linux with running systemd 249+, Python 3.11+ and the Node/uv tools required by
@@ -67,6 +73,12 @@ confirmation. Never put passwords in commands, URLs or source files. Use
 receives a stable internal UUID.
 
 ### Open a published Workspace after login
+
+A release can include several Legion workspaces. Select them and set their order
+in **Publish application**; the first workspace opens after login. The title menu
+only lists published workspaces. Template export and per-user provisioning preserve
+this order and remap each workspace's layout to the new user's cards.
+The existing template size limit of 101 nodes applies to the combined selection.
 
 Publish a Legion in an engineering workspace, stop that backend, then export a template:
 

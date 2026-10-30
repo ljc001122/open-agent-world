@@ -6,12 +6,15 @@ The **Desktop release** workflow builds Windows x64, macOS Apple Silicon and mac
 
 1. Prepare the version and `docs/release-notes.md` in a PR to `dev`. Use a new
    version greater than previous releases; do not reuse a published tag.
-2. Keep the application version consistent in `frontend/package.json` and its
-   lockfile, `backend/pyproject.toml`, `backend/uv.lock`, `backend/__init__.py`,
-   `desktop/package.json` and its lockfile, `desktop/src-tauri/tauri.conf.json`,
-   `desktop/src-tauri/Cargo.toml` and its application entry in `Cargo.lock`.
-   Refresh locks with their package managers. Run `python scripts/check-release.py`.
-   Packaging verifies these committed values and never rewrites their versions.
+2. Run `python scripts/check-release.py --set-version 0.6.0` (or the intended
+   version) to update all application versions together: frontend and desktop
+   package manifests and lockfiles, backend metadata, lockfile and runtime
+   version, and Tauri/Cargo configuration and lockfile. The command also accepts
+   `v0.6.0` and prereleases such as `0.6.0-rc.1`, using equivalent Python metadata.
+   It preserves dependency, SDK and Pack versions. Commit the resulting changes.
+   Run `python scripts/check-release.py` to check consistency. Packaging verifies
+   these committed values and never rewrites their versions; pushing a tag alone
+   does not update application versions.
 3. Promote `dev` to `main` through a merge PR for a stable release. Wait for
    **Pull request checks**, **Documentation**, and **Desktop native checks** on
    the resulting source SHA. Release gating requires the latest push/manual
@@ -36,7 +39,9 @@ The **Desktop release** workflow builds Windows x64, macOS Apple Silicon and mac
    hashes. Complete signing and installed-app requirements before manually
    publishing the draft. No workflow publishes a formal Release automatically.
 8. Merge `main` back into `dev` through a PR after stable promotion, including
-   the promotion commit so subsequent release PRs remain up to date.
+   the promotion commit so subsequent release PRs remain up to date. Use merge
+   commits for promotions and branch synchronization; squashing these PRs loses
+   their shared history and makes already promoted work appear unmerged.
 
 ### Version domains
 

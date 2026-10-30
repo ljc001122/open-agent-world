@@ -1,4 +1,5 @@
 from dataclasses import replace
+from copy import deepcopy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from backend.config import Settings
-from backend.deploy import create_deployment, _rebind_native_sandboxes
+from backend.deploy import create_deployment, _rebind_native_sandboxes, validate_manifest
 from backend.errors import ConflictError, PermissionDeniedError
 from backend.main import create_app
 from backend.world.models import CardCreate, CardPatch, EdgePatch
@@ -77,6 +78,91 @@ def sign_in(client):
     assert "samesite=strict" in response.headers["set-cookie"].lower()
 
 
+def prepare_multiple_workspaces(path, *, plugin_directories=()):
+    records = prepare_source(path, plugin_directories=plugin_directories)
+    with TestClient(create_app(replace(settings(path), plugin_directories=plugin_directories)), client=("127.0.0.1", 50000)) as client:
+        note = node(client, "text", "Operations guide", content="Operations workspace content")
+        group = client.post("/api/legion-groups", json={"name": "Operations", "node_ids": [note["id"]]}).json()
+        operations = next(card for card in group if card["type"] == "legion")
+        layout = {"version": 2, "root": {"kind": "pane", "view": {"card_id": note["id"]}}}
+        assert client.patch(f"/api/nodes/{operations['id']}", json={"config": {"workspace_layout": layout}}).status_code == 200
+        private_note = node(client, "text", "Unpublished workspace data", content="PRIVATE WORKSPACE")
+        private = client.post("/api/legion-groups", json={"name": "Unpublished workspace", "node_ids": [private_note["id"]]}).json()
+        private_group = next(card for card in private if card["type"] == "legion")
+        request = {"legion_ids": [operations["id"], records["legion"]["id"]], "name": "Company portal"}
+        preview = client.post("/api/deployments/preview", json=request)
+        assert preview.status_code == 200 and preview.json()["ready"], preview.text
+        response = client.post("/api/deployments", json=request)
+        assert response.status_code == 201, response.text
+        records.update(release=response.json(), operations=operations, note=note, private_group=private_group, private_note=private_note)
+    return records
+
+
+def test_multiple_workspaces_survive_snapshot_and_restart_without_unpublished_access(tmp_path):
+    source, target = tmp_path / "source", tmp_path / "runtime"
+    records = prepare_multiple_workspaces(source)
+    create_deployment(source, target, records["release"]["id"], password=PASSWORD)
+    expected = [records["operations"]["id"], records["legion"]["id"]]
+    for _ in range(2):
+        with TestClient(create_app(settings(target))) as client:
+            assert client.get("/api/runtime-app").status_code == 401
+            sign_in(client)
+            response = client.get("/api/runtime-app")
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert [legion["id"] for legion in data["legions"]] == expected
+            assert [legion["name"] for legion in data["legions"]] == ["Operations", "Published studio"]
+            assert data["legion"]["id"] == expected[0]
+            cards = {card["id"]: card for card in data["cards"]}
+            assert cards[records["note"]["id"]]["parent_id"] == expected[0]
+            assert cards[records["text"]["id"]]["parent_id"] == expected[1]
+            for record in ("note", "text"):
+                assert client.get(f"/api/runtime-app/workspace/resources/{records[record]['id']}/text").status_code == 200
+            assert records["private_group"]["id"] not in response.text
+            assert records["private_note"]["id"] not in response.text
+            assert client.get(f"/api/runtime-app/workspace/resources/{records['private_note']['id']}/text").status_code == 404
+
+
+def test_multi_workspace_readiness_is_atomic_and_rechecked(tmp_path):
+    records = prepare_multiple_workspaces(tmp_path / "source")
+    with TestClient(create_app(settings(tmp_path / "source"))) as client:
+        request = {"legion_ids": [records["legion"]["id"], records["private_group"]["id"]], "name": "Portal"}
+        preview = client.post("/api/deployments/preview", json=request).json()
+        assert not preview["ready"]
+        assert [item["legion_id"] for item in preview["workspaces"]] == request["legion_ids"]
+        assert preview["issues"][0]["legion_id"] == records["private_group"]["id"]
+        before = client.get("/api/deployments").json()
+        assert client.post("/api/deployments", json=request).status_code == 422
+        # A stale successful preview cannot authorize a layout changed later.
+        request["legion_ids"] = [records["operations"]["id"], records["legion"]["id"]]
+        assert client.post("/api/deployments/preview", json=request).json()["ready"]
+        assert client.patch(f"/api/nodes/{records['operations']['id']}", json={"config": {"workspace_layout": {"version": 2}}}).status_code == 200
+        assert client.post("/api/deployments", json=request).status_code == 422
+        assert client.get("/api/deployments").json() == before
+
+
+@pytest.mark.parametrize("selection", [{}, {"legion_ids": []}, {"legion_ids": ["x", "x"]},
+                                     {"legion_ids": [""]}, {"legion_id": "x", "legion_ids": ["x"]}])
+def test_publish_rejects_invalid_workspace_selections(tmp_path, selection):
+    with TestClient(create_app(settings(tmp_path / "source"))) as client:
+        assert client.post("/api/deployments", json={"name": "Portal", **selection}).status_code == 422
+
+
+def test_manifest_rejects_inconsistent_workspace_access_and_default(tmp_path):
+    records = prepare_multiple_workspaces(tmp_path / "source")
+    manifest = {**records["release"], "password": {"salt": "00" * 16, "hash": "00" * 32}}
+    validate_manifest(manifest)
+    for mutate, message in (
+        (lambda value: value["workspaces"].reverse(), "Default workspace"),
+        (lambda value: value["permissions"].update({"unpublished": ["text"]}), "match the deployment grants"),
+        (lambda value: value["workspaces"][0]["permissions"].update(value["workspaces"][1]["permissions"]), "belong to one workspace"),
+    ):
+        invalid = deepcopy(manifest)
+        mutate(invalid)
+        with pytest.raises(ValueError, match=message):
+            validate_manifest(invalid)
+
+
 def test_runtime_auth_projection_and_management_absence(deployed):
     source, target, records = deployed
     with TestClient(create_app(settings(target)), client=("203.0.113.9", 3000)) as client:
@@ -137,7 +223,7 @@ def test_runtime_conversation_tasks_and_restart(deployed):
         assert client.get(document + "?summary_only=true").json() == {
             "revision": updated.json()["revision"], "summary": updated.json()["summary"]}
         assert client.post(action, json=payload).status_code == 409
-        assert client.post(action.replace("upsert", "configure_execution"), json={"arguments": {}}).status_code == 403
+        assert client.post(action.replace("upsert", "configure_execution"), json={"arguments": {}}).status_code == 422
         assert client.post(action, json={"arguments": {"tasks": [{"id": "report", "title": "Bad", "executor_id": records["hidden"]["id"]}]}}).status_code == 403
     with TestClient(create_app(settings(target))) as client:
         sign_in(client)
@@ -172,13 +258,17 @@ def test_shared_workspace_routes_keep_scope_and_configuration_locked(deployed):
         sign_in(client)
         summary = client.get(f"{root}/conversations/{chat}").json()
         assert summary["agents"][0]["model"] == "" and summary["context_statuses"] == {}
-        for path in ("/world", "/nodes", "/catalog", "/settings/models", f"/agents/{records['agent']['id']}"):
-            assert client.get(root + path).status_code == 404
+        for path in ("/world", "/catalog", "/settings/models", f"/agents/{records['agent']['id']}"):
+            response = client.get(root + path)
+            assert response.status_code == 200, response.text
+            assert records["hidden"]["id"] not in response.text and "PRIVATE INSTRUCTION" not in response.text
+        assert client.get(root + "/nodes").status_code == 405
         assert client.get(f"{root}/conversations/{records['hidden']['id']}").status_code == 404
         assert client.get(f"{root}/resources/{records['hidden']['id']}/text").status_code == 404
-        assert client.put(f"{root}/resources/{text_id}/text", json={"content": "overwrite"}).status_code in {404, 405}
+        revision = client.get(f"{root}/resources/{text_id}/text").json()["revision"]
+        assert client.put(f"{root}/resources/{text_id}/text", json={"content": "overwrite", "expected_revision": revision}).status_code == 200
         assert client.get(f"{root}/resources/{text_id}/history").json() == []
-        assert client.post(f"{root}/nodes/{board}/actions/configure_execution", json={"arguments": {}}).status_code == 403
+        assert client.post(f"{root}/nodes/{board}/actions/configure_execution", json={"arguments": {}}).status_code == 422
         assert client.post(f"{root}/nodes/{board}/actions/upsert", json={"arguments": {"tasks": None}}).status_code == 422
         response = client.post(f"{root}/conversations/{chat}/sessions", json={"title": "Shared session", "participant_ids": [records["agent"]["id"]]})
         assert response.status_code == 201
@@ -314,7 +404,7 @@ def test_cloned_windows_sandbox_identity_and_permissions_only_touch_copy(tmp_pat
     assert (sandbox / "workspace" / "result.txt").read_text() == "keep"
 
 
-def test_unsupported_surface_and_hidden_terminal_permissions(tmp_path):
+def test_custom_sections_publish_and_hidden_terminal_permissions_are_preserved(tmp_path):
     with TestClient(create_app(settings(tmp_path / "source"))) as client:
         card = node(client, "sandbox", "Compute")
         response = client.post("/api/legion-groups", json={"name": "Workspace", "node_ids": [card["id"]]})
@@ -322,8 +412,9 @@ def test_unsupported_surface_and_hidden_terminal_permissions(tmp_path):
         request = {"legion_id": legion["id"], "name": "App", "allow_terminal": True}
         layout = {"version": 2, "root": {"kind": "pane", "view": {"card_id": card["id"], "section_id": "custom-admin-panel"}}}
         client.patch(f"/api/nodes/{legion['id']}", json={"config": {"workspace_layout": layout}})
-        denied = client.post("/api/deployments", json=request)
-        assert denied.status_code == 422 and "public runtime surface" in denied.text
+        custom = client.post("/api/deployments", json=request)
+        assert custom.status_code == 201, custom.text
+        assert custom.json()["permissions"][card["id"]] == ["custom-admin-panel"]
         layout["root"]["view"].pop("section_id")
         layout["hidden_sections"] = [{"card_id": card["id"], "section_id": "terminal"}]
         client.patch(f"/api/nodes/{legion['id']}", json={"config": {"workspace_layout": layout}})

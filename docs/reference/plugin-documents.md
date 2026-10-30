@@ -121,7 +121,7 @@ saved document, including progress.
 `has_document` is exposed in the node catalog. Browser rendering remains reviewed
 host code. The first supported structured view is selected by the trait
 `ui.task-board.v1`, with the task/value/summary/action contract implemented by the
-[Task Board plugin](../../plugins/task_board/README.md). Other plugins can adopt that
+[Task Board](../task-board.md). Other plugins can adopt that
 contract; different visual document types require an explicit host renderer.
 
 ## Document seeds and downloads (Plugin API 1.4)
@@ -142,7 +142,7 @@ access. The normal trusted-plugin boundary still applies to the callback itself.
 
 The public `open_agent_world.skill_packages` helper uses these contracts to
 register editable, portable skill toolboxes and export ordinary entry-point
-plugin packages. See [Skill Toolboxes](../../plugins/skill_packages/README.md) for
+plugin packages. See [Skill Toolboxes](../skill-toolboxes.md) for
 the authoring contract and `ui.skill-package.v1` renderer. Curated collections
 remain owned plugin contributions; the core does not maintain a parallel skill
 registry, plugin marketplace, or content-hash identity scheme.

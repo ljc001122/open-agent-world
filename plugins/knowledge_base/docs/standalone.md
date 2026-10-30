@@ -2,125 +2,154 @@
 
 [Pack guide](../README.md)
 
-## Running it without OAW
-
-The pipeline does not import OAW at all — only `plugin.py` and `lifecycle.py` do,
-and neither is loaded outside the backend. So the same code runs as a small
-service with an HTTP API, an MCP server for an agent harness, and a `kb` CLI:
+The OAW card, standalone HTTP service, MCP and `kb` CLI share the same project,
+conversion, Space and experiment operations. Install service dependencies with:
 
 ```sh
-python -m venv .venv && .venv/bin/pip install -e 'plugins/knowledge_base[service]'
+python -m pip install -e 'plugins/knowledge_base[service]'
 ```
 
-A **store** is a directory holding one `knowledge.db` plus a small settings file;
-it defaults to `$KB_SERVICE_STORE`, else `~/.local/share/oaw-knowledge`. One store
-can hold many **collections**, named per call (`--collection`, or the URL path) —
-this is the same unit the OAW card calls a collection, and each one can in turn hold
-several **groups** (`kb groups`), the same source-organizing unit the card's group
-selector manages. A file belongs to exactly one group; a fresh collection starts
-with a single unnamed default group, so nothing about groups is required to use
-the store the way earlier versions did.
+A store contains `knowledge.db` and `settings.json`. Select it with `--store` or
+`KB_SERVICE_STORE`; the default is `~/.local/share/oaw-knowledge`. One store is one
+knowledge base containing stable projects. Projects can hold reports, original
+data, experimental files, notes and supplementary material.
 
-The whole loop in a terminal, no browser and no backend:
+## Import and convert
+
+Imports preview project boundaries before committing. Folder paths are preserved;
+ZIP and TAR expansion enforces path, entry and size limits.
 
 ```sh
 export KB_SERVICE_STORE=~/kb
-kb ingest paper.pdf                       # uploads it; conversion is a separate step
-kb process                                # converts every unconverted source, in a batch
-kb sources                                # source id, record id, engine used
-kb knowledge open --source SOURCE_ID      # a draft over one or more converted sources
-kb knowledge extract DRAFT_ID             # your model, your credentials: one call per source (no chunking or review offline)
-kb knowledge show DRAFT_ID                # the concepts and relations, each with its sources
-kb knowledge publish DRAFT_ID             # the only command that writes the literature layer
-kb graph --layer literature
+kb import ./reports --grouping depth --depth 2
+# Inspect the projects and token, then commit the same preview:
+kb import --preview-token TOKEN --grouping depth --depth 2 --commit
+kb projects
+kb projects PROJECT_ID
 ```
 
-Records read out of sources with a schema of your own are the other family:
+Grouping choices are `top`, `leaf`, `single`, `depth` and `files`; `depth 0`
+also makes one project per file. Committing starts conversion by default. Use
+`--no-convert` to defer it, then `kb convert PROJECT_ID ...`. Local CLI commands
+wait for jobs before closing their worker; remote commands return job IDs.
+Follow them with `kb jobs --job JOB_ID --watch`.
+
+Add supplementary files to an existing project with:
 
 ```sh
-kb schema add --file conductivity-schema.json   # name, definition, system_prompt
-kb records extract --schema SCHEMA_ID --source SOURCE_ID [--replace]
+kb import supplement.csv --grouping single --project PROJECT_ID --commit
+```
+
+Repeating a committed preview token returns the same receipt. Identical content
+at the same project path reuses its source. Replacing a path activates a new
+immutable source revision while retaining earlier evidence.
+`kb markdown --source SOURCE_ID` reads converted Markdown.
+
+## Direct Markdown projection
+
+A Space defines a name, instructions, JSON Schema and output kind (`table` or
+`graph`). For example, `report-space.json`:
+
+```json
+{
+  "name": "Reported measurements",
+  "kind": "table",
+  "system_prompt": "Extract measurements explicitly supported by the project files.",
+  "definition": {
+    "type": "object",
+    "required": ["records"],
+    "properties": {"records": {"type": "array", "items": {"type": "object"}}}
+  }
+}
+```
+
+```sh
+kb spaces add --file report-space.json
+kb spaces list
+kb project PROJECT_ID ANOTHER_PROJECT_ID --space SPACE_ID
+kb call projections
+kb review PROJECTION_ID --note "Verify values against the attached report"
+```
+
+Model calls use `KB_MODEL`, `KB_MODEL_API_KEY` and `KB_MODEL_BASE_URL`
+(an OpenAI-compatible endpoint). Credentials stay in the CLI process.
+The service never receives them.
+
+Projection reads the original converted Markdown of all current project files;
+there is no intermediate knowledge frame. Subset selection reuses unchanged
+completed results and running work. `--rerun` explicitly creates a new version.
+Results carry project, Space version and source provenance. Review is optional
+and preserves the earlier result in history. Results require no publication.
+
+`kb call OPERATION --file request.json` accepts any operation's JSON request.
+For example, `{"operation":"get","projection_id":"..."}` reads a projection;
+`include_history` on a projection listing includes earlier versions.
+
+## Experimental records and insights
+
+The experiment chain remains:
+`project files → custom-schema JSON records → insights over published records`.
+
+```sh
+kb schema add --file experiment-schema.json
+kb call experiment_bundle_prepare --file bundle.json
+kb call experiment_ingest --file upload.json
+kb jobs --job JOB_ID --watch
+kb records extract --bundle BUNDLE_ID
 kb records list --schema SCHEMA_ID
 kb records publish RECORD_ID
+kb insights stats --schema SCHEMA_ID
+kb insights extract --schema SCHEMA_ID
+kb insights publish INSIGHT_ID
+kb graph
 ```
 
-`kb ingest` also accepts several files at once and, in process, waits for their
-batch conversion the same way it always waited for one — pass `--group GROUP_ID`
-to file them into a named group instead of the default one, and `kb groups create
---name Alloys` to make one first.
+`bundle.json` supplies `schema_id`, `name` and optionally `group_id` (the project
+ID). `upload.json` supplies `bundle_id`, `filename`, `media_type` and
+`content_base64`. Schema files contain `name`, `definition` and `system_prompt`.
+Records and insights support inspection, explicit publication and unpublication.
+Use `--project PROJECT_ID` to scope listings and analysis. Insights cite records;
+records cite the original files.
 
-`kb tools` prints the agent manifest; `kb --help` lists the rest (`jobs --watch`,
-`markdown --out`, `knowledge unpublish|delete`, `records show|unpublish|delete`,
-`settings`, `groups`, `process`). Insights have their own family:
-
-```sh
-kb insights stats [--schema ID ...]               # the statistics, no model involved; no --schema:
-                                                  # every experiment schema (--schema-kind literature for
-                                                  # the Records tab's), with cross-schema stats
-kb insights extract [--schema ID ...] [--replace]  # your model proposes draft insights over that scope
-kb insights list [--schema ID] [--kind anomaly] [--status draft] [--query moisture]
-kb insights publish INSIGHT_ID [...]              # writes the graph's experiment layer
-kb insights unpublish INSIGHT_ID                  # removes exactly what publish wrote
-kb graph --layer experiment                       # or --layer literature
-```
-
-### As a service
+## HTTP and MCP
 
 ```sh
-export KB_SERVICE_TOKEN=$(openssl rand -hex 16)
-kb serve --store ~/kb            # 127.0.0.1:8931
+export KB_SERVICE_TOKEN=your-service-token
+kb serve --store ~/kb
 curl -H "Authorization: Bearer $KB_SERVICE_TOKEN" \
-     -d '{}' http://127.0.0.1:8931/v1/collections/default/overview
+     -H 'Content-Type: application/json' -d '{}' \
+     http://127.0.0.1:8931/v1/overview
 ```
 
-`POST /v1/collections/{collection}/{operation}` takes the action's arguments as the
-body, for every operation the card has, because both read one table. `GET /v1/tools`
-returns the manifest and `GET /v1/health` is the only unauthenticated route.
-Binding anything other than loopback without a token is refused.
+`POST /v1/{operation}` takes the operation's JSON arguments. `GET /v1/projects`
+lists projects; `GET /v1/tools` supplies the agent manifest. Only
+`GET /v1/health` is unauthenticated. Non-loopback serving requires a token.
 
-**Writing the graph is not reachable over the network.** `knowledge_review`, `knowledge_graph_audit_apply` and
-`insight_review` with `operation=publish` return 403 unless `KB_ADMIN_TOKEN` is set
-on the service *and* presented, and even then the first call returns
-`confirmation_required` until the request repeats with `?confirm=true`. Out of the
-box, publishing a knowledge draft or an insight happens on the canvas or at the
-host's own terminal — nowhere else.
+Publishing experimental records or insights requires a separate `KB_ADMIN_TOKEN`
+to be configured and presented. An admin must also send `?confirm=true` after
+receiving `confirmation_required`. A service token cannot bypass this gate with
+that query parameter. Space projection results are usable immediately.
 
-Point the CLI at a running service with `--service URL` (or `KB_SERVICE_URL`) and
-it proxies instead of opening the store itself.
+The CLI uses a running service with `--service URL` or `KB_SERVICE_URL`.
+Configure MCP with:
 
-### For an agent harness (MCP)
-
-```jsonc
-{"command": "kb", "args": ["mcp", "--store", "/home/you/kb", "--collection", "default"]}
+```json
+{"command":"kb","args":["mcp","--store","/home/you/kb"]}
 ```
 
-The server exposes the shared operation table's agent tools on stdio, including
-selected-source processing, schema management, draft opening and upload preparation.
-Raw file bodies, broad management actions and publication are not tools.
-`knowledge_import_artifact` is OAW-only: it requires the host's independently
-authorized Conversation/Artifact reference. OAW also adds bounded `wait_seconds`
-to `knowledge_jobs`; standalone callers can poll jobs after ingesting through CLI/HTTP.
+MCP exposes the same project, Space, conversion, projection, revision and
+experiment tools as OAW. Raw upload bytes, settings and human publication are
+not agent tools. OAW's attachment import additionally uses independently
+authorized host artifact references.
 
-### The two modes coexist — one writer per store
+One process owns a store's job worker. `kb serve` writes `.kb-service.lock`;
+local commands refuse a live server's store and direct callers to `--service`.
+Shutdown removes the lock. Cards and standalone services use separate stores
+by default.
 
-A card and a service are separate stores by default: the card's store is its node
-storage directory inside the OAW profile, the service's is `--store`. Both may run
-at once.
+## Focused validation
 
-What must not happen is **two processes writing one store**: each opens MKB's job
-thread, and two of them race the same job rows in one SQLite file. `kb serve`
-writes `.kb-service.lock` (pid, url) into the store; an in-process `kb` command on
-a locked store refuses and prints the `--service` URL to use instead. The lock is
-removed on shutdown and ignored if its pid is gone.
-
-## Tests
-
-```sh
-cd plugins/knowledge_base && pytest    # pipeline, service and the layering guard
-```
-
-That suite needs no OAW on the path — `test_layering.py` asserts as much by
-importing the core in a clean interpreter and failing if `open_agent_world` or
-`backend` appears in `sys.modules`. The host seam (registration, the error
-conversion, create/delete) is covered by
+From `plugins/knowledge_base`, run `pytest tests/test_projects.py tests/test_spaces.py
+tests/test_service.py tests/test_cli.py`. `test_layering.py` checks that standalone
+core imports do not load OAW. Host registration and authorization are tested in
 `backend/tests/test_knowledge_base_plugin.py`.
