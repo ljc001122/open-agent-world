@@ -4,6 +4,7 @@ from backend.plugins.containers import NodeContainerDefinition
 from backend.plugins.builtin_tutorials import AGENT_TUTORIALS, CONVERSATION_TUTORIALS, TEXT_TUTORIALS, SANDBOX_TUTORIALS
 
 from dataclasses import dataclass
+from copy import deepcopy
 from contextlib import suppress
 import logging
 from typing import Any, Mapping
@@ -11,6 +12,7 @@ from typing import Any, Mapping
 from backend.errors import PluginCompatibilityError, ResourceValidationError
 from backend.legion_workspace import remap_workspace_config
 from backend.sandbox.models import SandboxError
+from backend.sandbox.text_edits import TEXT_EDITS_SCHEMA
 from backend.plugins.registry import (
     PLUGIN_API_VERSION,
     CapabilityGrantDefinition,
@@ -976,10 +978,7 @@ def _register_builtin(registry: PluginRegistration) -> None:
         input_schema={"type": "object", "properties": {
             "path": {"type": "string", "minLength": 1, "description": "Workspace-relative path using forward slashes; no traversal."},
             "content": {"type": "string", "minLength": 1, "description": "Complete UTF-8 file contents (at most 256 KiB)."},
-            "edits": {"type": "array", "minItems": 1, "maxItems": 20, "items": {
-                "type": "object", "properties": {"old": {"type": "string", "minLength": 1},
-                    "new": {"type": "string"}}, "required": ["old", "new"], "additionalProperties": False},
-                "description": "Sequential exact replacements; include enough context for each old text to occur once."},
+            "edits": deepcopy(TEXT_EDITS_SCHEMA),
             "overwrite": {"type": "boolean", "default": False}},
             "required": ["path"], "oneOf": [
                 {"required": ["content"], "not": {"required": ["edits"]}},

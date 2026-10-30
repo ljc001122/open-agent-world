@@ -90,16 +90,34 @@ def test_unknown_skill_lists_only_current_authorized_toolbox_ids_with_bounded_ou
     def read(identity):
         return client.portal.call(provider.invoke_tool, agent["id"], tool.capability_id,
                                   {"toolbox": node["id"], "skill_id": identity})
+    assert read("structure_inspect")["skill"]["id"] == "structure-inspect"
     with pytest.raises(ResourceValidationError) as caught:
-        read("structure_inspect")
+        read("missing_skill")
     message = str(caught.value)
-    assert "Use exact Skill ID 'structure-inspect'" in message
+    assert "Unknown Skill ID 'missing_skill'" in message
     assert "12 of 16" in message and "private-skill" not in message
     assert "Omit skill_id" in message and len(message) < 1600
     assert read("structure-inspect")["skill"]["id"] == "structure-inspect"
     client.delete(f"/api/edges/{edge['id']}")
     with pytest.raises(PermissionDeniedError):
         read("structure_inspect")
+
+
+def test_skill_name_alias_collisions_require_an_explicit_member(client):
+    box = create_node(client, "oaw.skills")
+    first = edit(client, box, "upsert", {"id": "first", "name": "shared-name", "instructions": "First"})['value']['skills'][0]
+    second = edit(client, box, "upsert", {"id": "second", "name": "shared_name", "instructions": "Second"})['value']['skills'][1]
+    agent = create_node(client, "agent")
+    client.post('/api/edges', json={'source': agent['id'], 'target': box['id'], 'relationship': 'oaw.skills.use'})
+    provider = WorldAgentCapabilityProvider(client.app.state.services)
+    tool = client.portal.call(provider.list_tools, agent['id'])[0]
+    def read(identity):
+        return client.portal.call(provider.invoke_tool, agent['id'], tool.capability_id,
+                                  {'toolbox': box['id'], 'skill_id': identity})
+    with pytest.raises(ResourceValidationError):
+        read('shared_name')
+    assert read(first['node_id'])['skill']['instructions'] == 'First'
+    assert read(second['node_id'])['skill']['instructions'] == 'Second'
 
 
 def test_member_edit_invalidates_parent_revision_and_preserves_assembled_document(client):

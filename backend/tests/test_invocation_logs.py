@@ -365,6 +365,27 @@ async def test_error_callback_replacement_is_saved_as_the_returned_result(native
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('replace', [False, True])
+async def test_name_resolution_error_before_tool_callback_is_archived(native, replace):
+    *_, checkpoints = native
+    trace = ModelTrace(asyncio.Queue(), checkpoint_store=checkpoints)
+    denial = {'ok': False, 'error': {'code': 'disallowed_tool', 'command_dispatched': False}}
+    async def recover(**kwargs):
+        return denial if replace else None
+    callbacks = archived_tool_callbacks(trace, 'builder', {'on_tool_error_callback': recover})
+    result = await callbacks['on_tool_error_callback'](
+        NS(name='absent_tool'), {'question': 'original argument'}, NS(function_call_id='unknown'), ValueError('Tool not found'))
+    row = checkpoints.invocations.records('tools')['tool-call:0:builder:unknown']
+    assert row['arguments'] == {'question': 'original argument'}
+    assert row['state'] == ('returned' if replace else 'failed')
+    if replace:
+        assert row['response'] == result == denial and row['response_complete']
+        assert row['overridden'] is True
+    else:
+        assert result is None and row['error_type'] == 'ValueError'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('failure', [RuntimeError, asyncio.CancelledError])
 async def test_error_callback_failure_settles_archive_and_propagates(native, failure):
     _, _, _, _, checkpoints = native

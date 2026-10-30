@@ -4,6 +4,11 @@ from __future__ import annotations
 from .models import SandboxValidationError
 
 TEXT_LIMIT = 256 * 1024
+MAX_TEXT_EDITS = 20
+TEXT_EDITS_SCHEMA = {"type": "array", "minItems": 1, "maxItems": MAX_TEXT_EDITS, "items": {
+    "type": "object", "properties": {"old": {"type": "string", "minLength": 1},
+        "new": {"type": "string"}}, "required": ["old", "new"], "additionalProperties": False},
+    "description": "Sequential exact replacements; include enough context for each old text to occur once."}
 
 
 def apply_text_edits(raw: bytes, edits: list) -> bytes:
@@ -13,8 +18,8 @@ def apply_text_edits(raw: bytes, edits: list) -> bytes:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SandboxValidationError("Text edits require an existing UTF-8 file") from exc
-    if "\0" in text or not isinstance(edits, list) or not 1 <= len(edits) <= 20:
-        raise SandboxValidationError("Use 1 to 20 exact text edits on a UTF-8 file without NUL bytes")
+    if "\0" in text or not isinstance(edits, list) or not 1 <= len(edits) <= MAX_TEXT_EDITS:
+        raise SandboxValidationError(f"Use 1 to {MAX_TEXT_EDITS} exact text edits on a UTF-8 file without NUL bytes")
     for index, edit in enumerate(edits, 1):
         if (not isinstance(edit, dict) or set(edit) != {"old", "new"}
                 or not isinstance(edit["old"], str) or not edit["old"]
