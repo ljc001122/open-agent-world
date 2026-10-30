@@ -292,7 +292,9 @@ class DarwinSeatbeltBackend(SandboxBackend):
 
     supports_invocation_environment = True
     supports_execution_policy = True
-    supports_optional_python_runtime = True
+    # Like Windows, ordinary commands, shells and installed CLIs all use the
+    # managed Python environment. There is no implicit host-Python fallback.
+    supports_optional_python_runtime = False
 
     def __init__(
         self, managed_root: Path, *,
