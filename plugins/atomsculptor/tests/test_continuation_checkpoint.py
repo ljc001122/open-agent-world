@@ -1,5 +1,6 @@
 """Cross-stage inline evidence and explicit native continuation, without model APIs."""
 from copy import deepcopy
+import asyncio
 from types import SimpleNamespace
 import json
 
@@ -16,7 +17,97 @@ from test_workflow import REQUEST, evidence, tool
 
 
 @pytest.mark.asyncio
-async def test_build_inline_results_share_existing_limits_and_cannot_satisfy_build():
+@pytest.mark.parametrize("source_state", ["same", "changed", "legacy", "unexecuted"])
+async def test_failed_script_continuation_rechecks_native_receipt_and_patches_current_file(source_state):
+    from backend.agents.models import ScopedToolDefinition
+    from backend.sandbox.text_edits import apply_text_edits
+    from test_execution_steps import prior
+    old = await start_direct()
+    source = "value =\n" + "# saved intermediate\n" * 500
+    await tool(old, "write_sandbox_text_file", {"sandbox": "box", "path": "build.py", "content": source},
+               {"written": len(source)})
+    failure = {"exit_code": 1, "command_id": "old-command", "stdout": "", "stderr": 'File "build.py", line 1\nSyntaxError'}
+    if source_state != "unexecuted":
+        await tool(old, "execute_command", {"sandbox": "box", "argv": ["python3", "build.py"]}, failure)
+    checkpoint = old.closeout_checkpoint("disconnected before repair")
+    if source_state == "legacy":
+        checkpoint.pop("repair_source")
+    live_source = source + "# edited externally\n" if source_state == "changed" else source
+    files, calls = {"build.py": live_source}, []
+    definitions = [ScopedToolDefinition("operation:" + name, "alias_" + name, "Native") for name in
+        ("read_sandbox_file", "wait_sandbox_operation", "write_sandbox_text_file", "execute_command")]
+    async def invoke(capability, args):
+        name = capability.removeprefix("operation:")
+        calls.append((name, dict(args)))
+        if name == "wait_sandbox_operation":
+            assert source_state != "unexecuted"
+            return failure
+        if name == "read_sandbox_file":
+            text, offset, limit = files[args["path"]], args["offset"], args["limit"]
+            end = min(len(text), offset + limit)
+            return {"state": "text", "path": args["path"], "text": text[offset:end], "offset": offset,
+                    "total_chars": len(text), "truncated": end < len(text), "next_offset": end if end < len(text) else None}
+        if name == "write_sandbox_text_file":
+            text = apply_text_edits(files[args["path"]].encode(), args["edits"]).decode()
+            files[args["path"]] = text
+            return {"written": len(text.encode())}
+        return {"exit_code": 0, "command_id": "repaired-command", "stdout": "saved intermediate"}
+    new = evidence()
+    assert new.restore_continuation(checkpoint, "trusted-source")
+    new.configure_tools(definitions)
+    new.steps.available = True
+    await new.reconcile_continuation(definitions, invoke, asyncio.Event())
+    assert new.script_sources[("box", "build.py")] == live_source
+    assert len([row for row in calls if row[0] == "read_sandbox_file"]) == 2
+    assert all(row[0] in {"read_sandbox_file", "wait_sandbox_operation"} for row in calls)
+    assert bool(new.workflow.local_repair(new)) == (source_state == "same")
+    assert not new.outputs and not new.measurement_reports and not new.confirmed
+    repaired = await new.steps.run(new, definitions, invoke, asyncio.Event(), call_id="repair",
+        sandbox="box", script_path="build.py", source="", action_mode="patch", edits=[{"old": "value =\n", "new": "value = 1\n"}],
+        previous_assessment=prior(new) if source_state == "same" else None,
+        question="Repair the reported syntax error", expected_output="Saved intermediate", stop_condition="After one execution")
+    assert repaired["exit_code"] == 0 and repaired["step"]["action_mode"] == "patch"
+    assert sum(name == "execute_command" for name, _ in calls) == 1
+    assert files["build.py"] == live_source.replace("value =\n", "value = 1\n")
+    assert new.latest_experiment().command_id == "repaired-command"
+    assert not new.outputs and not new.workflow.checkpoints
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["permission", "missing_file", "unknown_command", "receipt_mismatch", "pending_effect"])
+async def test_continuation_does_not_restore_unconfirmed_or_unauthorized_failed_source(blocker):
+    from backend.agents.models import ScopedToolDefinition
+    from backend.errors import PermissionDeniedError
+    old = await start_direct()
+    await tool(old, "write_sandbox_text_file", {"sandbox": "box", "path": "build.py", "content": "broken"}, {"written": 6})
+    await tool(old, "execute_command", {"sandbox": "box", "argv": ["python3", "build.py"]},
+        {"exit_code": 1, "command_id": "old-command"})
+    checkpoint = old.closeout_checkpoint("stopped")
+    if blocker == "pending_effect":
+        checkpoint["unknown_executions"] = ["unresolved-dispatch"]
+    definitions = [ScopedToolDefinition("operation:" + name, name, "Native") for name in
+                   ("read_sandbox_file", "wait_sandbox_operation")]
+    calls = []
+    async def invoke(capability, args):
+        calls.append(capability)
+        if blocker == "permission":
+            raise PermissionDeniedError("Access revoked")
+        if capability.endswith("wait_sandbox_operation"):
+            if blocker == "unknown_command":
+                return {"status": "running", "operation_id": "old-command"}
+            return {"exit_code": 1, "command_id": "different" if blocker == "receipt_mismatch" else "old-command"}
+        return {"state": "missing", "path": "build.py"}
+    new = evidence()
+    assert new.restore_continuation(checkpoint, "trusted-source")
+    new.configure_tools(definitions)
+    await new.reconcile_continuation(definitions, invoke, asyncio.Event())
+    assert not new.scripts and not new.script_sources and not new.execution_receipts
+    assert new.continuation["repair_state"]
+    assert not calls if blocker == "pending_effect" else calls
+
+
+@pytest.mark.asyncio
+async def test_build_inline_checks_are_advisory_and_cannot_satisfy_build():
     e = await start_direct()
     for i in range(2):
         result = await tool(e, "execute_command", {"sandbox": "box", "argv": ["python3", "-c", f"print({i})"]},
@@ -26,9 +117,10 @@ async def test_build_inline_results_share_existing_limits_and_cannot_satisfy_bui
     assert e.actions.inline_measurements[-1]["command_id"] == "c1"
     assert e.actions.inline_measurements[-1]["stage"] == "build"
     assert e.actions.snapshot()["inline_measurements"][-1]["stdout"] == "1\n"
-    rejected = await tool(e, "execute_command", {"sandbox": "box", "argv": ["python3", "-c", "print(2)"]}, {})
-    assert rejected["error"]["code"] == "inline_probe_limit"
-    assert "run_modelling_step" in rejected["error"]["message"]
+    result = await tool(e, "execute_command", {"sandbox": "box", "argv": ["python3", "-c", "print(2)"]},
+                        {"exit_code": 0, "stdout": "2\n", "command_id": "c2"})
+    assert result["exit_code"] == 0 and e.actions.inline_attempts == 3
+    assert e.actions.inline_measurements[-1]["command_id"] == "c2"
     assert not e.scripts and not e.measurement_reports and not e.outputs
     assert e.workflow.advance(e, "build", "box", "build.py")["error"]["code"] == "execution_required"
     # CLI tools still use their ordinary native path.

@@ -129,7 +129,7 @@ def test_runtime_defaults_bind_ordinary_commands_compose_skills_and_preserve_gra
     recipe = json.loads(runner.with_name('recipe.json').read_text())
     assert recipe['mode'] == 'command' and recipe['sources'][0]['owner'] == 'atomsculptor'
     assert recipe['management'] == 'legacy-shared'
-    assert recipe['python'] == ['ase>=3.22', 'matplotlib>=3.7', 'numpy>=1.23', 'pymatgen>=2024.0']
+    assert recipe['python'] == ['ase>=3.22', 'matplotlib>=3.7', 'mp-api', 'numpy>=1.23', 'pandas', 'pymatgen>=2024.0', 'rdkit']
     assert native.last_cwd == backend._sandboxes_root / sandbox['id'] / 'workspace'
     value = client.get(f"/api/nodes/{skill['id']}/document").json()['value']
     value['runtime_requirements'] = [{'owner': 'atomsculptor', 'environment': 'structure-inspect'}]

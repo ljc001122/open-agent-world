@@ -305,7 +305,7 @@ class AtomSculptorPlugin:
     descriptor = PluginDescriptor(
         id="atomsculptor",
         version="0.1.0",
-        plugin_api_version="1.35",
+        plugin_api_version="1.41",
         name="AtomSculptor",
         description="Agent-assisted atomistic structure modelling.",
         # Ordinary commands and core Skills use OAW's shared Sandbox Python;

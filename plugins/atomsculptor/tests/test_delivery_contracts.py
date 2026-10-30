@@ -17,7 +17,7 @@ from test_optimization_paths import delivery_setup
 from test_workflow import activate, execute, tool
 
 from skill_materialization import skill_scripts
-SCRIPTS = skill_scripts("structure-inspect")
+SCRIPTS = skill_scripts("structure_inspect")
 
 
 def signature_parser(command):
@@ -124,9 +124,59 @@ async def test_confirmed_manual_delivery_closes_without_revalidation_conversion_
     result = await run_delivery_step(e, definitions, invoke, stopped, call_id='delivery', sandbox='box',
                                     skill='skill', structure_path='cnt.extxyz', target='structure', validate={})
     assert result['ok'] and result['receipt_reused'] and not calls
+    assert result['read_back']['revision'] == 2 and result['read_back']['summary'] is None
     assert e.workflow.current == 'complete'
     prepare(e, req := request({'run_delivery_step', 'advance_modelling_stage', 'finish_task'}))
     assert declarations(req) == {'finish_task'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('has_summary', [False, True])
+async def test_delivery_exposes_native_read_back_scope_without_extra_inspection(has_summary):
+    e, definitions, invoke, stopped, calls = await delivery_setup()
+    from oaw_atomsculptor import _structure_overview
+    from oaw_atomsculptor.structure import Atom, StructureDocument
+    document = StructureDocument(atoms=[Atom(id=i, symbol='C', x=i, y=0, z=0) for i in range(80)]).model_dump(mode='json')
+    async def native(capability, args):
+        result = await invoke(capability, args)
+        if capability == 'operation:inspect_atom_structure':
+            result = _structure_overview(document, revision=result['revision'], detail='summary', offset=0, limit=10)
+        if capability in {'operation:inspect_atom_structure', 'operation:import_atom_structure_file'}:
+            result = dict(result)
+            if has_summary:
+                result['summary'] = {'atom_count': 80, 'selected_atom_count': 0}
+            else:
+                result.pop('summary', None)
+        return result
+    result = await run_delivery_step(e, definitions, native, stopped, call_id='delivery', sandbox='box',
+                                    skill='skill-node', structure_path='cnt.extxyz', target='structure')
+    assert result['ok'] and result['read_back']['revision'] == result['import']['revision'] == 2
+    assert result['read_back']['source'] == 'native_inspect_atom_structure'
+    assert result['read_back']['summary'] == ({'atom_count': 80, 'selected_atom_count': 0} if has_summary else None)
+    assert result['read_back']['structure']['formula'] == 'C80'
+    assert result['read_back']['structure']['atom_count'] == 80
+    assert 'atoms' not in result['read_back']['structure']
+    assert result['confirmation']['atom_count_match'] is (True if has_summary else None)
+    assert 'not re-run' in result['confirmation']['scope']
+    assert sum(n == 'inspect_atom_structure' for n, _ in calls) == 2
+    assert sum(n == 'import_atom_structure_file' for n, _ in calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_delivery_does_not_claim_confirmation_for_a_mismatched_read_back_count():
+    e, definitions, invoke, stopped, calls = await delivery_setup()
+    async def native(capability, args):
+        result = await invoke(capability, args)
+        if capability == 'operation:import_atom_structure_file':
+            return {**result, 'summary': {'atom_count': 80}}
+        if capability == 'operation:inspect_atom_structure' and e.imports:
+            return {**result, 'summary': {'atom_count': 79}}
+        return result
+    result = await run_delivery_step(e, definitions, native, stopped, call_id='delivery', sandbox='box',
+                                    skill='skill-node', structure_path='cnt.extxyz', target='structure')
+    assert result['error']['code'] == 'delivery_read_back_required'
+    assert e.workflow.current == 'deliver' and not e.confirmed
+    assert sum(n == 'import_atom_structure_file' for n, _ in calls) == 1
 
 
 @pytest.mark.asyncio
@@ -217,6 +267,7 @@ async def test_assessment_only_and_read_dependencies_remain_available_without_ne
              'read_skills', 'preview_file', 'run_skill_script', 'inspect_sandbox'}
     e = setup(names=names); await activate(e, delivery='report')
     e.steps.available = True
+    await tool(e, 'inspect_sandbox', {'sandbox': 'box'}, {'state': 'ready'})
     await tool(e, 'write_sandbox_text_file', {'sandbox': 'box', 'path': 'probe.py', 'content': 'print(32)'}, {'written': 9})
     await tool(e, 'execute_command', {'sandbox': 'box', 'argv': ['python3', 'probe.py']},
                {'exit_code': 0, 'command_id': 'actual-probe', 'stdout': 'count=32'})

@@ -31,83 +31,66 @@ async def complete(e, model, req):
 
 
 @pytest.mark.asyncio
-async def test_successful_start_recovery_does_not_exhaust_later_batch_correction():
-    e = setup()
-    await activate(e)
-    await tool(e, "inspect_sandbox", {"sandbox": "box"}, {"state": "stopped"})
+async def test_mixed_batch_returns_per_call_feedback_without_regenerating_response():
+    e = setup(); await activate(e)
+    await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
     turns = 0
-    rejected_ids = {"start-with-read", "read-with-start", "save-with-execute", "execute-with-save"}
-
     class Fixture(BaseLlm):
         model: str = "openai/action-feedback-fixture"
-
         async def generate_content_async(self, req, stream=False):
             nonlocal turns
             turns += 1
-            if turns in {2, 4}:
-                text = "\n".join(p.text or "" for c in req.contents for p in c.parts or [])
-                assert "non_readonly_tool_batch" in text
-                assert "command_dispatched" in text
-                assert SERIAL_ACTION_INSTRUCTION in text
-                assert ("start-with-read" if turns == 2 else "save-with-execute") in text
             if turns == 1:
-                yield response(("start-with-read", "start_sandbox", {"sandbox": "box"}),
-                               ("read-with-start", "inspect_sandbox", {"sandbox": "box"}))
-            elif turns == 2:
-                yield response(("start-only", "start_sandbox", {"sandbox": "box"}))
-            elif turns == 3:
-                yield response(("save-with-execute", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py", "content": "print(1)"}),
-                               ("execute-with-save", "execute_command", {"sandbox": "box", "argv": ["python3", "probe.py"]}))
+                yield response(("write", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py", "content": "print(1)"}),
+                               ("read", "inspect_sandbox", {"sandbox": "box"}))
             else:
-                yield response(("save-only", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py", "content": "print(1)"}))
-
+                yield response(("write-alone", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py", "content": "print(1)"}))
     model = bounded_output_model(Fixture(), e.trace, "structure_builder", e, NS(types=types), 81920)
-    prepare(e, req := request())
-    first = await complete(e, model, req)
-    assert [p.function_call.id for p in first[0].content.parts] == ["start-only"]
-    await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
-    prepare(e, req := request())
-    second = await complete(e, model, req)
-    assert [p.function_call.id for p in second[0].content.parts] == ["save-only"]
-    assert not rejected_ids.intersection(p.function_call.id for r in first + second for p in r.content.parts)
-    assert turns == 4 and e.actions.recoveries == 2 and e.block_reason is None
-    assert not e.scripts and not e.executions  # No discarded save/execute reached the tool boundary.
+    prepare(e, req := request()); first = await complete(e, model, req)
+    assert [p.function_call.id for p in first[0].content.parts] == ["write", "read"] and turns == 1
+    write, read = [p.function_call for p in first[0].content.parts]
+    rejected = await tool(e, write.name, write.args, {"written": 8}, call_id=write.id)
+    returned = await tool(e, read.name, read.args, {"state": "ready"}, call_id=read.id)
+    assert rejected["error"]["code"] == "non_readonly_tool_batch"
+    assert returned == {"state": "ready"} and not e.scripts and not e.executions
+    prepare(e, req := request()); second = await complete(e, model, req)
+    call = second[0].content.parts[0].function_call
+    assert await tool(e, call.name, call.args, {"written": 8}, call_id=call.id) == {"written": 8}
+    assert e.scripts[("box", "probe.py")].phase == "written"
+    assert turns == 2 and e.actions.recoveries == 0 and e.block_reason is None
 
 
 @pytest.mark.asyncio
-async def test_identical_rejected_batch_stops_after_feedback_even_with_new_call_ids():
-    e = setup()
-    await activate(e)
+async def test_identical_rejected_calls_are_detected_after_feedback_with_new_ids():
+    e = setup(); await activate(e)
     await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
     turns = 0
-
     class Fixture(BaseLlm):
         model: str = "openai/action-feedback-fixture"
-
         async def generate_content_async(self, req, stream=False):
             nonlocal turns
             turns += 1
             yield response((f"save-{turns}", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py", "content": "print(1)"}),
                            (f"execute-{turns}", "execute_command", {"sandbox": "box", "argv": ["python3", "probe.py"]}))
-
     model = bounded_output_model(Fixture(), e.trace, "structure_builder", e, NS(types=types), 81920)
-    prepare(e, req := request())
-    with pytest.raises(HarnessStopped, match="unchanged rejected model_response.*non_readonly_tool_batch"):
-        await complete(e, model, req)
-    assert turns == 2 and e.actions.recoveries == 1
-    assert not e.scripts and not e.executions
+    for _ in range(2):
+        prepare(e, req := request()); accepted = await complete(e, model, req)
+        for part in accepted[0].content.parts:
+            call = part.function_call
+            result = await tool(e, call.name, call.args, {}, call_id=call.id)
+            assert result["error"]["code"] == "non_readonly_tool_batch"
+    with pytest.raises(HarnessStopped, match="unchanged rejected .*non_readonly_tool_batch"):
+        prepare(e, request())
+    assert turns == 2 and e.actions.recoveries == 0 and not e.scripts and not e.executions
 
 
 @pytest.mark.asyncio
-async def test_a_changed_protocol_error_receives_its_own_specific_feedback():
-    e = setup()
-    await activate(e)
+async def test_a_changed_protocol_error_gets_its_own_call_feedback():
+    e = setup(); await activate(e)
     await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
     turns = 0
-
     class Fixture(BaseLlm):
         model: str = "openai/action-feedback-fixture"
-
         async def generate_content_async(self, req, stream=False):
             nonlocal turns
             turns += 1
@@ -117,16 +100,21 @@ async def test_a_changed_protocol_error_receives_its_own_specific_feedback():
                 yield response(("save", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py"}),
                                ("execute", "execute_command", {"sandbox": "box", "argv": ["python3", "probe.py"]}))
             else:
-                text = "\n".join(p.text or "" for c in req.contents for p in c.parts or [])
-                assert "disallowed_tool" in text and "non_readonly_tool_batch" in text
                 yield response(("corrected", "write_sandbox_text_file", {"sandbox": "box", "path": "probe.py", "content": "print(1)"}))
-
     model = bounded_output_model(Fixture(), e.trace, "structure_builder", e, NS(types=types), 81920)
-    prepare(e, req := request())
-    e.actions.allowed = {"write_sandbox_text_file", "execute_command"}
-    result = await complete(e, model, req)
-    assert turns == 3 and result[0].content.parts[0].function_call.id == "corrected"
-    assert not e.scripts and e.actions.recoveries == 2
+    codes = []
+    for _ in range(3):
+        prepare(e, req := request()); e.actions.allowed = {"write_sandbox_text_file", "execute_command"}
+        accepted = await complete(e, model, req)
+        for part in accepted[0].content.parts:
+            call = part.function_call
+            result = await tool(e, call.name, call.args, {"written": 8}, call_id=call.id)
+            if "error" in result:
+                assert result["error"]["call_id"] == call.id
+                codes.append(result["error"]["code"])
+    assert codes == ["disallowed_tool", "non_readonly_tool_batch", "non_readonly_tool_batch"]
+    assert turns == 3 and not e.block_reason and e.actions.recoveries == 0
+    assert e.scripts[("box", "probe.py")].phase == "written"
 
 
 @pytest.mark.asyncio

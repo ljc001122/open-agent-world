@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 import unittest
 from contextlib import asynccontextmanager
@@ -116,7 +115,7 @@ class StructureContractTests(unittest.TestCase):
         self.assertIn("write_sandbox_text_file", BUILDER_INSTRUCTION)
         self.assertIn("python3", BUILDER_INSTRUCTION)
         self.assertIn("heredocs", BUILDER_INSTRUCTION)
-        self.assertIn("`structure-inspect`, never `structure_inspect`", BUILDER_INSTRUCTION)
+        self.assertIn("`structure_inspect` and `nanotube_builder`", BUILDER_INSTRUCTION)
 
     def test_direct_builder_uses_user_delivery_instead_of_specialist_report(self) -> None:
         from oaw_atomsculptor.runtime import DIRECT_DELIVERY, SPECIALIST_DELIVERY
@@ -128,6 +127,30 @@ class StructureContractTests(unittest.TestCase):
         self.assertIn(DIRECT_DELIVERY, direct.instruction)
         self.assertNotIn(SPECIALIST_DELIVERY, direct.instruction)
         self.assertNotIn("Return one compact JSON object", direct.instruction)
+        self.assertNotIn("finish_task", direct.instruction)
+        for unavailable in ("run_modelling_step", "read_modelling_source", "advance_modelling_stage",
+                            "run_delivery_step", "validate_modelling_artifact"):
+            self.assertNotIn(unavailable, direct.instruction)
+
+    def test_team_builder_instructions_follow_staged_tool_registration(self) -> None:
+        class Agent:
+            def __init__(self, **values):
+                self.__dict__.update(values)
+
+        roles = {role: [] for role in ("planner", "structure_builder", "materials_project")}
+        for required in (False, True):
+            with self.subTest(workflow_required=required):
+                root = _build_team(SimpleNamespace(Agent=Agent), "fixture", AgentConfig("a", "Atom"),
+                                   roles, workflow_required=required)
+                planner, builder, _ = root.sub_agents
+                for unavailable in ("list_sandbox_files", "read_sandbox_file"):
+                    self.assertNotIn(unavailable, planner.instruction)
+                self.assertIn("finish_task", builder.instruction)
+                for helper in ("run_modelling_step", "patch_modelling_step", "rewrite_modelling_step",
+                               "rerun_modelling_step", "read_modelling_source", "advance_modelling_stage",
+                               "validate_modelling_artifact", "run_delivery_step"):
+                    self.assertEqual(helper in builder.instruction, required)
+                self.assertEqual("needs_plan_review" in builder.instruction, required)
 
     def test_sandbox_text_write_checks_live_execute_grant(self) -> None:
         calls = []
@@ -342,10 +365,18 @@ class StructureContractTests(unittest.TestCase):
         )
         run_config = SimpleNamespace(RunConfig=lambda **values: SimpleNamespace(**values),
                                      StreamingMode=SimpleNamespace(SSE="SSE"))
-        modules = {"google.adk.agents.run_config": run_config}
 
         async def exercise():
-            with patch.dict(sys.modules, modules), \
+            def build(_bindings, _model, _config, role_tools, callbacks, _models, *, workflow_required):
+                self.assertTrue(workflow_required)
+                builder_tools = {tool.name for tool in role_tools["structure_builder"]}
+                self.assertTrue({"run_modelling_step", "read_modelling_source", "run_delivery_step",
+                                 "validate_modelling_artifact"} <= builder_tools)
+                return callbacks
+
+            from google.adk.agents import run_config as sdk_run_config
+            with patch.object(sdk_run_config, "RunConfig", run_config.RunConfig), \
+                 patch.object(sdk_run_config, "StreamingMode", run_config.StreamingMode), \
                  patch.object(runtime, "get_agent", new=AsyncMock()), \
                  patch.object(runtime, "_bindings", return_value=bindings), \
                  patch.object(runtime, "_model", return_value=SimpleNamespace(model="offline/fixture")), \
@@ -353,7 +384,7 @@ class StructureContractTests(unittest.TestCase):
                  patch.object(runtime, "_session", new=AsyncMock(return_value="session")), \
                  patch.object(runtime, "_selection_context", new=AsyncMock(return_value=[])), \
                  patch.object(runtime, "_managed_roles", return_value={}), \
-                 patch("oaw_atomsculptor.runtime._build_team", side_effect=lambda _b, _m, _c, _t, callbacks, _models: callbacks):
+                 patch("oaw_atomsculptor.runtime._build_team", side_effect=build):
                 return [item async for item in runtime._execute(
                     AgentConfig("agent", "Atom"),
                     SimpleNamespace(run_id=run.run_id, context_id="session"),
@@ -823,12 +854,10 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("Call finish_task immediately", PLANNER_INSTRUCTION)
         self.assertIn("delegate directly", ROOT_INSTRUCTION)
         self.assertIn("only when", ROOT_INSTRUCTION)
-        self.assertIn("three times in a row", " ".join(BUILDER_INSTRUCTION.split()))
-        self.assertIn("stop retrying it and report exactly which step is blocked",
-                      " ".join(BUILDER_INSTRUCTION.split()))
-        self.assertIn("Never claim a step ran when its tool call failed", BUILDER_INSTRUCTION)
+        self.assertIn("Code in thoughts", BUILDER_INSTRUCTION)
+        self.assertIn("not a saved-script execution receipt", BUILDER_INSTRUCTION)
         self.assertIn("do not probe for system Python", " ".join(BUILDER_INSTRUCTION.split()))
-        self.assertIn("never invent one", BUILDER_INSTRUCTION)
+        self.assertIn("never invent missing measurements or log paths", BUILDER_INSTRUCTION)
 
     def test_planner_model_request_keeps_the_configured_output_budget(self) -> None:
         trace = _ModelTrace(asyncio.Queue())
@@ -892,12 +921,12 @@ class RuntimeContractTests(unittest.TestCase):
 
     def test_specialists_have_distinct_graph_scoped_tool_sets(self) -> None:
         definitions = tuple(SimpleNamespace(name=name) for name in (
-            "inspect_atom_structure", "observe_atom_structure", "task_board_read",
-            "task_board_create_plan", "read_skills", "run_skill_script",
+            "inspect_atom_structure", "observe_atom_structure", "read_tasks",
+            "write_tasks", "read_skills", "run_skill_script",
             "inspect_sandbox", "write_sandbox_text_file", "replace_atom_structure", "publish_artifact",
         ))
         names = lambda role: {tool.name for tool in _role_definitions(definitions, role)}
-        self.assertIn("task_board_read", names("planner"))
+        self.assertIn("read_tasks", names("planner"))
         self.assertIn("inspect_atom_structure", names("planner"))
         self.assertIn("read_skills", names("planner"))
         self.assertNotIn("run_skill_script", names("planner"))
@@ -905,11 +934,11 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertNotIn("replace_atom_structure", names("planner"))
         self.assertIn("replace_atom_structure", names("structure_builder"))
         self.assertIn("read_skills", names("structure_builder"))
-        self.assertNotIn("task_board_create_plan", names("structure_builder"))
+        self.assertNotIn("write_tasks", names("structure_builder"))
         self.assertIn("run_skill_script", names("materials_project"))
         self.assertIn("write_sandbox_text_file", names("materials_project"))
         self.assertNotIn("replace_atom_structure", names("materials_project"))
-        self.assertNotIn("task_board_read", names("materials_project"))
+        self.assertNotIn("read_tasks", names("materials_project"))
 
     def test_team_has_three_independent_task_mode_specialists(self) -> None:
         class FakeAgent:
@@ -1072,7 +1101,7 @@ class RuntimeContractTests(unittest.TestCase):
         plugin.register(real)
         self.assertIn("atomsculptor.adk-team", real.runtime_provider_model_resolvers)
         self.assertIn("atomsculptor.adk-team", real.runtime_provider_context_stores)
-        self.assertEqual(plugin.descriptor.plugin_api_version, "1.35")
+        self.assertEqual(plugin.descriptor.plugin_api_version, "1.41")
         defaults = real.nodes["atomsculptor.agent"].default_equipment
         self.assertEqual([(item.key, item.type, item.relationship) for item in defaults],
                          [("skills", "atomsculptor.skills", "atomsculptor.skills.use")])
@@ -1137,22 +1166,28 @@ class RuntimeContractTests(unittest.TestCase):
         from oaw_atomsculptor.skill_package import atomsculptor_skills
 
         package = atomsculptor_skills()
-        self.assertEqual(package.version, "0.1.9")
+        self.assertEqual(package.version, "0.1.14")
         self.assertEqual(len(package.skills), 18)
-        inspect = next(skill for skill in package.skills if skill.id == "structure-inspect")
+        self.assertTrue(all("-" not in skill.id and "-" not in skill.name for skill in package.skills))
+        from backend.packs.spec import read_source_pack
+        from pathlib import Path
+        spec = read_source_pack(Path(__file__).resolve().parents[1])
+        self.assertTrue(all(reference.environment in spec.environments
+                            for skill in package.skills for reference in skill.runtime_requirements))
+        inspect = next(skill for skill in package.skills if skill.id == "structure_inspect")
         self.assertIn("def to_atomsculptor_document", inspect.files["scripts/structure_inspect.py"])
         self.assertIn("def from_atomsculptor_document", inspect.files["scripts/structure_inspect.py"])
-        materials = next(skill for skill in package.skills if skill.id == "materials-project-search")
+        materials = next(skill for skill in package.skills if skill.id == "materials_project_search")
         self.assertIn("MPRester", materials.files["scripts/materials_project.py"])
-        molecule = next(skill for skill in package.skills if skill.id == "molecular-structure-creation")
+        molecule = next(skill for skill in package.skills if skill.id == "molecular_structure_creation")
         self.assertIn("EmbedMolecule", molecule.files["scripts/smiles_builder.py"])
-        nanotube = next(skill for skill in package.skills if skill.id == "nanotube-builder")
+        nanotube = next(skill for skill in package.skills if skill.id == "nanotube_builder")
         self.assertIn("axial end", nanotube.instructions)
         self.assertIn("axial_period", nanotube.files["scripts/nanotube_builder.py"])
         self.assertIn("No `defect_builder`", next(skill for skill in package.skills
-                          if skill.id == "surface-defect-creation").instructions)
+                          if skill.id == "surface_defect_creation").instructions)
         self.assertIn("**not** bundled", next(skill for skill in package.skills
-                          if skill.id == "mof-structure-creation").instructions)
+                          if skill.id == "mof_structure_creation").instructions)
         self.assertFalse(any("__pycache__" in path or path.endswith(".pyc")
                              for skill in package.skills for path in skill.files))
 

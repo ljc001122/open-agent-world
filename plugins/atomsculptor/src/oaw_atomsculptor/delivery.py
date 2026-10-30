@@ -186,7 +186,7 @@ def is_independent_validation(args, evidence):
 def validation_step_function(evidence, definitions, invoke, stopped):
     async def validate_modelling_artifact(sandbox: str, skill: str, structure_path: str,
                                          checks: dict | None = None) -> dict:
-        """Read-only independent validation of a saved HOST artifact; never imports or advances a stage."""
+        """Independently validate a saved HOST artifact. Call alone: starts Sandbox work and records a validation receipt. Preserves the artifact; never imports or advances a stage."""
         if stopped.is_set():
             raise asyncio.CancelledError()
         def error(code, message, **details):
@@ -245,7 +245,9 @@ def validation_step_function(evidence, definitions, invoke, stopped):
         next_action = (evidence.actions.next_action(evidence)[0] if passed else
             "Use the independent measurements to assess the current execution or patch one failed check. Stage acceptance is unchanged.")
         return {"ok": passed, "validation": result, "report": report, "artifact_bound": bound,
-                "next_action": next_action}
+                "next_action": next_action,
+                **({"checkpoint_action": {"tool": "advance_modelling_stage", "arguments": completion}}
+                   if passed and (completion := evidence.workflow.checkpoint_arguments(evidence, structure_path)) else {})}
     return validate_modelling_artifact
 
 
@@ -277,7 +279,10 @@ async def run_delivery_step(evidence: Any, definitions: Any, invoke: Any, stoppe
         if build.get("structure_path") != structure_path or build.get("sandbox") != sandbox:
             return error("delivery_already_confirmed", "A Structure import and read-back already succeeded. Close its checkpoint with advance_modelling_stage(stage='deliver', target); do not replay a different candidate.", target=target, revision=evidence.imports[target])
         advance = workflow.advance(evidence, "deliver", target=target)
-        return {**advance, "receipt_reused": True, "target": target, "revision": evidence.imports[target]}
+        return {**advance, "receipt_reused": True, "target": target, "revision": evidence.imports[target],
+                "read_back": {"revision": evidence.confirmed[target], "summary": None,
+                              "source": "retained_host_confirmation"},
+                "next_action": "Report the retained native revision confirmation. Read-back summary fields are unavailable in this receipt; do not invent them or repeat import."}
     try:
         validation_argv = _validate_argv(structure_path, validate)
         convert_argv = _skill_argv("to_atomsculptor_document", {"folder": ".", "file_name": structure_path,
@@ -400,10 +405,26 @@ async def run_delivery_step(evidence: Any, definitions: Any, invoke: Any, stoppe
         return advance
     evidence.notice("structure_builder", "Delivery pipeline completed with native receipts",
                     workflow_event="delivery_pipeline", target=target, revision=import_revision)
+    imported_summary = _payload(imported).get("summary") or {}
+    read_back_summary = _payload(read_back).get("summary") or {}
+    expected_count, actual_count = imported_summary.get("atom_count"), read_back_summary.get("atom_count")
+    # The native inspector already supplies this bounded overview. Reuse it;
+    # no second inspection or atom-window/coordinate-array transfer is needed.
+    overview = _payload(read_back).get("value") or {}
     return {"ok": True, "steps": steps, "target": target, "revision": import_revision,
             "file": structure_path, "document_file": document_file,
+            "import": {"revision": import_revision, "summary": _payload(imported).get("summary")},
+            "read_back": {"revision": _payload(read_back).get("revision"),
+                          "summary": _payload(read_back).get("summary"),
+                          "structure": {key: overview[key] for key in ("atom_count", "formula", "coordinate_bounds", "cell", "pbc") if key in overview},
+                          "source": "native_inspect_atom_structure"},
+            "confirmation": {"revision_match": True,
+                "atom_count_match": (actual_count == expected_count if expected_count is not None and actual_count is not None else None),
+                "scope": "Native import/read-back revision and available atom_count. File validation is separate; species and per-atom geometry/scientific checks were not re-run on the read-back document."},
+            "validation": {"passed": True, "scope": report.get("validation_scope"),
+                           "receipt_reused": validated.get("receipt_reused", False)},
             "next_stage": workflow.current,
-            "next_action": "Report the verified file, revision and measurements; finish_task with the compact JSON outcome."}
+            "next_action": "The native inspect/import/inspect sequence is complete. Use read_back and confirmation for document facts and the validation receipt for file facts; finish_task with measured limitations. No additional inspection is needed to repeat this confirmation."}
 
 
 def delivery_step_function(evidence: Any, definitions: Any, invoke: Any, stopped: Any):

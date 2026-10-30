@@ -20,7 +20,7 @@ async def begin_optimization(e, objective):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("direction,values", [("maximize", [5, 5]), ("minimize", [5, 5])])
-async def test_measured_stagnation_across_new_sources_routes_to_existing_planner(direction, values):
+async def test_measured_stagnation_across_sources_is_advisory(direction, values):
     readings = iter(values)
     e, calls, run = await setup(stdout=lambda: json.dumps({"oaw_measurements": {"objective": {"name": "measured objective", "value": next(readings), "direction": direction, "unit": "count"}}}))
     await begin_optimization(e, {"name": "measured objective", "direction": direction, "unit": "count"})
@@ -29,11 +29,12 @@ async def test_measured_stagnation_across_new_sources_routes_to_existing_planner
         a = prior(e, objective={"name": "measured objective", "value": value, "direction": direction, "unit": "count"})
         result = e.workflow.assess_previous(e, a)
         assert result["ok"]
-        assert result["observation"]["outcome"] == ("needs_plan_review" if i == 1 else "continue")
+        assert result["observation"]["outcome"] == "continue"
     assert len(calls) == 4 and {c["stage"] for c in e.workflow.checkpoints} == {"probe"}
     action, allowed = e.actions.next_action(e)
-    assert allowed == {"finish_task"} and "Planner" in action
-    assert (await run(script_path="bypass.py"))["error"]["code"] == "plan_review_required"
+    assert allowed is None or "run_modelling_step" in allowed
+    assert e.workflow.host_signal["advisory"] is True
+    assert e.workflow.before_tool("structure_builder", "run_modelling_step", {}, e) is None
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 schema_version = 3
 
 [compatibility]
-plugin_api = "1.35"
+plugin_api = "1.41"
 oaw = ">=0.1.0,<1"
 
 [distribution]
@@ -23,15 +23,14 @@ entry = "frontend/index.tsx"
 mode = "pack-build"
 project = "frontend/package.json"
 
-# Base dependencies use OAW's host-prepared, read-only shared Sandbox Python.
-# Optional engines retain OAW's private on-use profiles below.
+# Modelling and bundled Skills use OAW's host-prepared shared Sandbox Python.
 [environments.modelling]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
 prepare = "on-use"
-verify_imports = ["ase", "matplotlib", "numpy", "pymatgen.core"]
-python = ["ase>=3.22", "matplotlib>=3.7", "numpy>=1.23", "pymatgen>=2024.0"]
+verify_imports = ["ase", "matplotlib", "mp_api.client", "numpy", "pandas", "pymatgen.core", "rdkit.Chem"]
+python = ["ase>=3.22", "matplotlib>=3.7", "mp-api", "numpy>=1.23", "pandas", "pymatgen>=2024.0", "rdkit"]
 
 [prerequisites.model-connection]
 kind = "model-connection"
@@ -66,6 +65,8 @@ environments = ["interface-builder"]
 [environments.materials-project-search]
 target = "sandbox"
 provider = "python"
+management = "legacy-shared"
+verify_imports = ["mp_api.client"]
 sources = [{ path = "src/oaw_atomsculptor/skills/materials-project-search/requirements.txt", kind = "requirements" }]
 
 [features.materials-project-search]
@@ -75,6 +76,8 @@ prerequisites = ["materials-project"]
 [environments.molecular-structure-creation]
 target = "sandbox"
 provider = "python"
+management = "legacy-shared"
+verify_imports = ["ase", "numpy", "rdkit.Chem"]
 sources = [{ path = "src/oaw_atomsculptor/skills/molecular-structure-creation/requirements.txt", kind = "requirements" }]
 
 [features.molecular-structure-creation]
