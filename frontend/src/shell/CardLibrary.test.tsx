@@ -283,6 +283,24 @@ it('scopes failures to their owner and repairs source environments from secondar
   expect((screen.getByLabelText('Source pack') as HTMLSelectElement).value).toBe('pack:alpha');
 });
 
+it('retries a selected archive environment when the same owner also has source inventory', async () => {
+  const state = packSnapshot();
+  const owner = state.packs.alpha.definition.plugin_id;
+  const version = { ...installedContentPack, id: 'distribution.alpha', owner, kind: 'plugin' as const,
+    environment: { state: 'environment_failed', error: 'Source ownership conflict' } };
+  const source = { id: version.id, owner, name: 'Alpha pack', version: version.version,
+    source: 'development' as const, enabled: true, loaded: true,
+    environments: [], backend_requirements: [], frontend_dependencies: [], warnings: [] };
+  const installed = { restart_required: true, versions: [version], inventory: [source] };
+  vi.mocked(worldApi.getInstalledPacks).mockResolvedValue(installed);
+  const retry = vi.spyOn(worldApi, 'managePack').mockResolvedValue(installed);
+  useCardLibrary.setState({ snapshot: state, open: true, tab: 'packs', refresh: async () => {} });
+  await act(async () => { render(<CardLibrary />); });
+  fireEvent.click(screen.getByRole('button', { name: 'View pack Alpha pack' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry environment preparation' })));
+  expect(retry).toHaveBeenCalledWith('environment/retry', 'POST', undefined);
+});
+
 afterEach(() => {
   cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   useCardLibrary.setState({ snapshot: null, busy: false, open: false, tab: "packs", inspectedEntry: null, error: "", refresh: originalRefresh });
