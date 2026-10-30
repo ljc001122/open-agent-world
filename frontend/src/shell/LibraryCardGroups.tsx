@@ -16,16 +16,15 @@ const cardKey = (card: LibraryCard) => `${card.kind}:${card.id}`;
 export function LibraryCardGroups({ groups, renderCard }: { groups: Group[]; renderCard: (card: LibraryCard) => ReactNode }) {
   const prefix = useId();
   const board = useRef<HTMLDivElement>(null);
-  const grid = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const [columns, setColumns] = useState(1);
-  const [geometry, setGeometry] = useState<{ width: number; height: number; frames: Frame[] }>({ width: 0, height: 0, frames: [] });
+  const [geometry, setGeometry] = useState<{ width: number; height: number; contentHeight: number; frames: Frame[];
+    positions: { left: number; top: number }[][] }>({ width: 0, height: 0, contentHeight: 0, frames: [], positions: [] });
   const pending = useRef<Change | null>(null);
   const animations = useRef<Animation[]>([]);
   const ghosts = useRef<HTMLElement[]>([]);
   const epoch = useRef(0);
   const folded = (group: Group) => group.items.length > 1 && collapsed.has(group.source.id);
-  const placements = placeLibraryGroups(groups.map(group => folded(group) ? 1 : group.items.length), columns);
 
   function stopMotion() {
     epoch.current++;
@@ -58,44 +57,56 @@ export function LibraryCardGroups({ groups, renderCard }: { groups: Group[]; ren
   }
 
   useLayoutEffect(() => {
-    const element = grid.current!, surface = board.current!;
+    const element = content.current!, surface = board.current!;
     const measure = () => {
       if (!element.clientWidth) return;
-      const item = element.querySelector<HTMLElement>('[data-group-item]');
-      if (!item) { setGeometry({ width: surface.clientWidth, height: 0, frames: [] }); return; }
-      const gap = parseFloat(getComputedStyle(element).columnGap);
-      const nextColumns = Math.max(1, Math.floor((element.clientWidth + gap) / (item.offsetWidth + gap)));
-      if (nextColumns !== columns) { stopMotion(); setColumns(nextColumns); return; }
-      const frames = groups.map(group => {
+      const items = [...element.querySelectorAll<HTMLElement>('[data-group-item]')];
+      if (!items.length) { setGeometry({ width: surface.clientWidth, height: 0, contentHeight: 0, frames: [], positions: [] }); return; }
+      const nodes = groups.map(group => items.filter(item => item.dataset.source === group.source.id));
+      const styles = getComputedStyle(element);
+      const layout = placeLibraryGroups(nodes.map(group => group.map(item => item.offsetHeight)), {
+        width: element.clientWidth, cardWidth: items[0].offsetWidth,
+        cardGap: parseFloat(styles.getPropertyValue('--card-gap')),
+        groupGap: parseFloat(styles.getPropertyValue('--group-gap')),
+        rowGap: parseFloat(styles.getPropertyValue('--row-gap')),
+      });
+      const positions = layout.positions.map(group => group.map(position => ({
+        left: element.offsetLeft + position.left, top: element.offsetTop + position.top,
+      })));
+      const labels = element.querySelectorAll<HTMLElement>('.library-group-label');
+      const frames = groups.map((group, index) => {
         const rows = new Map<number, GroupRect>();
-        for (const node of element.querySelectorAll<HTMLElement>('[data-group-item]')) {
-          if (node.dataset.source !== group.source.id) continue;
-          const top = node.offsetTop, left = node.offsetLeft;
+        for (const [itemIndex, node] of nodes[index].entries()) {
+          const { top, left } = positions[index][itemIndex];
           const row = rows.get(top) ?? { left: Infinity, right: -Infinity, top: top - 8, bottom: top + node.offsetHeight + 8 };
           row.left = Math.min(row.left, left - 8);
           row.right = Math.max(row.right, left + node.offsetWidth + 8);
+          row.bottom = Math.max(row.bottom, top + node.offsetHeight + 8);
           rows.set(top, row);
         }
         const runs = [...rows.values()].sort((a, b) => a.top - b.top);
         const first = runs[0];
-        return { id: group.source.id, path: libraryGroupOutline(runs), left: first.left,
-          top: first.top - 23, width: first.right - first.left - 8 };
+        const width = first.right - first.left - 16;
+        // Folding changes this constraint; apply it before measuring the tab.
+        labels[index].style.maxWidth = `${width}px`;
+        return { id: group.source.id, path: libraryGroupOutline(runs, 8, labels[index].offsetWidth), left: first.left,
+          top: first.top - 24, width };
       });
-      setGeometry({ width: surface.clientWidth,
-        height: element.offsetTop + element.offsetHeight + parseFloat(getComputedStyle(surface).paddingBottom), frames });
+      setGeometry({ width: surface.clientWidth, contentHeight: layout.height, positions,
+        height: element.offsetTop + layout.height + parseFloat(getComputedStyle(surface).paddingBottom), frames });
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     let width = element.clientWidth;
     const observer = new ResizeObserver(() => {
-      // Board height animates independently; measuring stable item offsets avoids chasing transforms.
+      // Intrinsic card sizes stay stable while the board and positions animate.
       if (animations.current.length && element.clientWidth === width) return;
       if (element.clientWidth !== width) { stopMotion(); width = element.clientWidth; }
       measure();
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [groups, collapsed, columns]);
+  }, [groups, collapsed]);
 
   useLayoutEffect(() => {
     const change = pending.current;
@@ -159,14 +170,14 @@ export function LibraryCardGroups({ groups, renderCard }: { groups: Group[]; ren
     <svg className="library-group-outlines" aria-hidden="true" viewBox={`0 0 ${geometry.width || 1} ${geometry.height || 1}`} style={{ height: geometry.height }}>
       {geometry.frames.map(frame => <path key={frame.id} data-source={frame.id} d={frame.path} />)}
     </svg>
-    <div ref={grid} className="library-group-grid" style={{ gridTemplateColumns: `repeat(${columns}, var(--compact-card-width))` }}>
+    <div ref={content} className="library-group-layout" style={{ height: geometry.contentHeight }}>
       {groups.map((group, index) => {
         const { source, items } = group;
         const frame = geometry.frames.find(item => item.id === source.id);
         const isFolded = folded(group), canFold = items.length > 1;
         const labelId = `${prefix}-${index}-label`, itemsId = `${prefix}-${index}-cards`;
         const label = <><span className="library-group-name">{source.name}</span><span className="library-group-count">{items.length}</span>{canFold && (isFolded ? <ChevronRight size={13} /> : <ChevronDown size={13} />)}</>;
-        const position = (item: number) => ({ gridColumn: placements[index][item].column, gridRow: placements[index][item].row });
+        const position = (item: number) => geometry.positions[index]?.[item];
         return <section key={source.id} className="library-source-group" role="group" aria-labelledby={labelId} data-source={source.id}>
           <h4 id={labelId} className="library-group-label" aria-label={source.name} style={{ left: frame?.left, top: frame?.top, maxWidth: frame?.width }}>
             {canFold ? <button type="button" className="library-group-tab" data-group-toggle={source.id} aria-expanded={!isFolded} aria-controls={itemsId}
@@ -174,13 +185,12 @@ export function LibraryCardGroups({ groups, renderCard }: { groups: Group[]; ren
               : <span className="library-group-tab">{label}</span>}
           </h4>
           <div id={itemsId} className="library-group-cards">
-            {isFolded ? <div className="library-group-item library-group-stack-item" data-group-item={`stack:${source.id}`} data-source={source.id} style={position(0)}>
+            {isFolded ? <div className="library-group-item" data-group-item={`stack:${source.id}`} data-source={source.id} style={position(0)}>
               <button type="button" className="library-group-stack" aria-label={t('View cards in {v0}', { v0: source.name })} onClick={() => toggle(group)}>
                 {items.length > 2 && <span className="library-group-stack-back is-last" aria-hidden="true" />}
                 <span className="library-group-stack-back" aria-hidden="true" />
                 <LibraryCardSurface card={items[0]} className="library-group-stack-front" />
               </button>
-              <span className="library-group-stack-caption">{items.length} {t('cards')}</span>
             </div> : items.map((item, itemIndex) => <div key={cardKey(item)} className="library-group-item" data-group-item={cardKey(item)} data-source={source.id}
               data-internal={item.internal || undefined} style={position(itemIndex)}>{renderCard(item)}</div>)}
           </div>

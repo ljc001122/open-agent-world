@@ -365,7 +365,7 @@ it("keeps complete source groups together, including packs larger than the forme
     expect(within(group).getAllByRole("button", { name: /^Inspect Tool/ })).toHaveLength(count);
     fireEvent.click(within(group).getByRole('button', { name: `Collapse ${name}` }));
     expect(within(group).queryByRole('button', { name: /^Inspect Tool/ })).toBeNull();
-    expect(within(group).getByText(`${count} cards`)).toBeTruthy();
+    expect(within(group).getByText(String(count), { selector: '.library-group-count' })).toBeTruthy();
     fireEvent.click(within(group).getByRole('button', { name: `Expand ${name}` }));
     expect(within(group).getAllByRole('button', { name: /^Inspect Tool/ })).toHaveLength(count);
   }

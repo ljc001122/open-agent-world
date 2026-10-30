@@ -48,12 +48,23 @@ test('connected group frames keep left tabs, gather into stacks and leave single
       const items = [...element.querySelectorAll<HTMLElement>('[data-group-item]')];
       const paths = [...element.querySelectorAll<SVGGeometryElement>('.library-group-outlines path')];
       if (paths.length !== 3 || element.classList.contains('is-moving')) return false;
-      const grid = element.querySelector<HTMLElement>('.library-group-grid')!;
-      const styles = getComputedStyle(grid);
+      const layout = element.querySelector<HTMLElement>('.library-group-layout')!;
+      const styles = getComputedStyle(layout);
       const cardWidth = parseFloat(styles.getPropertyValue('--compact-card-width'));
-      const gap = parseFloat(styles.columnGap);
-      if (styles.gridTemplateColumns.split(' ').length !== Math.max(1, Math.floor((grid.clientWidth + gap) / (cardWidth + gap)))) return false;
+      const rowGap = parseFloat(styles.getPropertyValue('--row-gap'));
       if (items.some(item => Math.abs(item.offsetWidth - cardWidth) > 1)) return false;
+      if (items.some(item => item.offsetLeft < layout.offsetLeft || item.offsetLeft + item.offsetWidth > layout.offsetLeft + layout.clientWidth + 1
+        || item.offsetTop + item.offsetHeight > layout.offsetTop + layout.offsetHeight + 1)) return false;
+      let rowBottom = 0;
+      for (const [index, item] of items.entries()) {
+        const previous = items[index - 1];
+        if (previous) {
+          if (item.offsetLeft > previous.offsetLeft) {
+            if (Math.abs(item.offsetTop - previous.offsetTop) > 1) return false;
+          } else if (item.offsetTop - rowBottom < rowGap - 1) return false;
+        }
+        rowBottom = Math.max(rowBottom, item.offsetTop + item.offsetHeight);
+      }
       return paths.every(path => {
         const group = [...element.querySelectorAll<HTMLElement>('.library-source-group')].find(node => node.dataset.source === path.dataset.source)!;
         const tab = group.querySelector('.library-group-label')!.getBoundingClientRect();
@@ -101,5 +112,19 @@ test('connected group frames keep left tabs, gather into stacks and leave single
   await expect(library.getByRole('button', { name: /^(Expand|Collapse) First group$/ })).toHaveCount(0);
   await library.getByRole('button', { name: 'Inspect First group 2' }).click();
   await expect(library.getByRole('complementary', { name: 'Card details' }).getByRole('heading', { name: 'First group 2' })).toBeVisible();
+  const selected = first.locator('.library-card.is-selected');
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await selected.scrollIntoViewIfNeeded();
+    await expect.poll(() => selected.evaluate(card => {
+      const face = card.querySelector('.library-card-stock')!.getBoundingClientRect();
+      const tab = card.closest('.library-source-group')!.querySelector('.library-group-label')!.getBoundingClientRect();
+      const left = Math.max(face.left, tab.left), right = Math.min(face.right, tab.right);
+      const top = Math.max(face.top, tab.top), bottom = Math.min(face.bottom, tab.bottom);
+      return right > left && bottom > top
+        && card.contains(document.elementFromPoint((left + right) / 2, (top + bottom) / 2));
+    })).toBe(true);
+    await page.screenshot({ path: info.outputPath(`selected-above-tab-${width}.png`), animations: 'disabled' });
+  }
   expect(errors).toEqual([]);
 });

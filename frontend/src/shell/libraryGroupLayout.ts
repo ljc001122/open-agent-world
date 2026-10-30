@@ -1,22 +1,44 @@
 export interface GroupRect { left: number; right: number; top: number; bottom: number }
 interface Point { x: number; y: number }
 
-/** Share rows while keeping each group's cells connected across a line break. */
-export function placeLibraryGroups(counts: number[], columns: number) {
-  let cursor = 0;
-  return counts.map(count => {
-    const start = cursor % columns;
-    const remaining = columns - start;
-    if (start && count > remaining && count - remaining <= start) cursor += remaining;
-    return Array.from({ length: count }, () => {
-      const cell = { column: cursor % columns + 1, row: Math.floor(cursor / columns) + 1 };
-      cursor++;
+/** Share row baselines while allowing wider horizontal gaps between groups. */
+export function placeLibraryGroups(heights: number[][], size: {
+  width: number; cardWidth: number; cardGap: number; groupGap: number; rowGap: number;
+}) {
+  const { width, cardWidth, cardGap, groupGap, rowGap } = size;
+  const rows = [{ height: 0, hasTab: false }];
+  let left = 0, row = 0;
+  const nextRow = () => { left = 0; row++; rows.push({ height: 0, hasTab: false }); };
+  const capacity = (start: number) => Math.max(0, Math.floor((width - start + cardGap) / (cardWidth + cardGap)));
+  const cells = heights.map(cards => {
+    if (left) left += groupGap - cardGap;
+    const remaining = capacity(left);
+    if (!remaining) nextRow();
+    else if (cards.length > remaining) {
+      const continuation = Math.min(cards.length - remaining, capacity(0));
+      // Wrapped runs must overlap to keep the group's frame connected.
+      if (continuation * (cardWidth + cardGap) - cardGap + 16 <= left) nextRow();
+    }
+    return cards.map((height, index) => {
+      if (left + cardWidth > width && left) nextRow();
+      rows[row].height = Math.max(rows[row].height, height);
+      if (!index) rows[row].hasTab = true;
+      const cell = { left, row };
+      left += cardWidth + cardGap;
       return cell;
     });
   });
+  let bottom = 0;
+  const tops = rows.map((row, index) => {
+    const top = index ? bottom + rowGap + (row.hasTab ? 24 : 0) : 0;
+    bottom = top + row.height;
+    return top;
+  });
+  const positions = cells.map(group => group.map(cell => ({ left: cell.left, top: tops[cell.row] })));
+  return { positions, height: bottom };
 }
 
-function roundedPath(points: Point[], tabCorner: Point, radius: number) {
+function roundedPath(points: Point[], radius: number) {
   const corners = points.filter((point, index, list) => {
     const before = list[(index + list.length - 1) % list.length];
     const after = list[(index + 1) % list.length];
@@ -26,7 +48,7 @@ function roundedPath(points: Point[], tabCorner: Point, radius: number) {
     const after = list[(index + 1) % list.length];
     const a = Math.hypot(point.x - before.x, point.y - before.y);
     const b = Math.hypot(after.x - point.x, after.y - point.y);
-    const r = point.x === tabCorner.x && point.y === tabCorner.y ? 0 : Math.min(radius, a / 2, b / 2);
+    const r = Math.min(radius, a / 2, b / 2);
     return { point,
       enter: { x: point.x + (before.x - point.x) * r / a, y: point.y + (before.y - point.y) * r / a },
       exit: { x: point.x + (after.x - point.x) * r / b, y: point.y + (after.y - point.y) * r / b } };
@@ -36,10 +58,14 @@ function roundedPath(points: Point[], tabCorner: Point, radius: number) {
     ` L ${enter.x} ${enter.y} Q ${point.x} ${point.y} ${exit.x} ${exit.y}`).join('') + ' Z';
 }
 
-/** Outline the union of row runs and their vertical bridges, including concave corners. */
-export function libraryGroupOutline(runs: GroupRect[], radius = 10) {
+/** Outline the tab, row runs and their vertical bridges as one continuous shape. */
+export function libraryGroupOutline(runs: GroupRect[], radius = 10, tabWidth = 0) {
   if (!runs.length) return '';
   const rectangles = [...runs];
+  if (tabWidth) {
+    const first = runs[0];
+    rectangles.push({ left: first.left, right: first.left + tabWidth, top: first.top - 24, bottom: first.top });
+  }
   for (let index = 1; index < runs.length; index++) {
     const a = runs[index - 1], b = runs[index];
     const left = Math.max(a.left, b.left), right = Math.min(a.right, b.right);
@@ -74,7 +100,7 @@ export function libraryGroupOutline(runs: GroupRect[], radius = 10) {
       if (!next) break;
       key = next;
     } while (key !== start);
-    paths.push(roundedPath(points, { x: runs[0].left, y: runs[0].top }, radius));
+    paths.push(roundedPath(points, radius));
   }
   return paths.join(' ');
 }

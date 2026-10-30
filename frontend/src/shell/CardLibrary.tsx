@@ -7,7 +7,7 @@ import { Archive, CalendarDays, Check, ChevronRight, Layers3, LibraryBig, Minus,
 import { useCardLibrary, type DeckEntry } from "../state/cardLibrary";
 import { useWorldStore } from "../state/worldStore";
 import { collectionDependencies, ensureCardsCollected } from "../state/cardDependencies";
-import { collectedLibraryCards, collectedLibraryLegions, compareLibraryCards, displayDeckName, libraryCardMatches, libraryCardMetadata, type LibraryCard } from "./libraryCatalog";
+import { collectedLibraryCards, collectedLibraryLegions, compareLibraryCards, libraryCardMatches, libraryCardMetadata, type LibraryCard } from "./libraryCatalog";
 import { LibraryPack } from "./LibraryPack";
 import { PackInstaller } from "./PackInstaller";
 import { InstalledPackDetails } from "./InstalledPackDetails";
@@ -147,6 +147,7 @@ export function CardLibrary() {
   };
   const renderCard = (item: LibraryCard) => {
     const included = deck?.entries.some(entry => same(entry, item));
+    const deckAction = t(included ? 'Remove {v0} from deck' : 'Add {v0} to deck', { v0: item.label });
     return <PhysicalLibraryCard key={`${item.kind}:${item.id}`} selected={Boolean(selected && same(selected, item))} included={Boolean(included)} color={item.definition?.color ?? "#78967b"}>
       <button className="library-card-inspect" draggable={false} data-legion-preview={item.kind === "legion" ? item.id : undefined} data-can-drag={item.available && !item.internal && !library.busy}
         onPointerDown={event => {
@@ -161,8 +162,8 @@ export function CardLibrary() {
         }} aria-label={t("Inspect {v0}", { v0: String(item.label) })} aria-description={item.description} title={item.description}><LibraryCardSurface card={item} data-deck-visual className="library-card-stock">
         {!item.available && !item.internal ? <span className="library-unavailable">{t("Unavailable")}</span> : null}</LibraryCardSurface></button>
       {item.internal && !included ? <div className="library-card-usage">{item.owners.length ? t("Use through its container") : t("Created by a world action")}</div> :
-        <button className={`library-card-add ${included ? "is-in-deck" : ""}`} disabled={library.busy || !deck || (!included && !item.available)} onClick={() => toggleCard(item)} aria-label={t(included ? 'Remove {v0} from deck' : 'Add {v0} to deck', { v0: item.label })}>
-          {included ? <Check size={14} /> : <Plus size={14} />}{included ? t("In {deck} · Remove", { deck: displayDeckName(deck!) }) : t("Add to current deck")}</button>}
+        <button className={`library-card-add ${included ? "is-in-deck" : ""}`} disabled={library.busy || !deck || (!included && !item.available)} onClick={() => toggleCard(item)} aria-label={deckAction} title={deckAction}>
+          {included ? <Check size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}</button>}
     </PhysicalLibraryCard>;
   };
 
