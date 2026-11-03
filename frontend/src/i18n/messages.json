@@ -8058,7 +8058,7 @@
   "Send": ["Send", "发送"],
   "Choose a model to draft a schema.": ["Choose a model to draft a schema.", "请先选择模型再起草结构。"],
   "At most {v0} sample files": ["At most {v0} sample files", "最多 {v0} 个样例文件"],
-  "Sample files are limited to 2 MiB": ["Sample files are limited to 2 MiB", "样例文件不能超过 2 MiB"]
+  "Sample files are limited to 2 MiB": ["Sample files are limited to 2 MiB", "样例文件不能超过 2 MiB"],
   "Canvas tools": ["Canvas tools", "画布工具"],
   "Hold to move card": ["Hold to move card", "按住以移动卡片"],
   "Hold the top to move a card. Hold the body to connect.": ["Hold the top to move a card. Hold the body to connect.", "按住卡片顶部提起移动，长按主体拖出连线。"],
