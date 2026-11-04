@@ -122,6 +122,7 @@ PartOf={name}.target
 [Service]
 {_common(application, user, '2G', 256)}Sockets={worker}.socket
 EnvironmentFile={instance}/worker.env
+EnvironmentFile=-{directory}/worker-common.env
 BindReadOnlyPaths={instance}:{view}
 BindPaths={instance}/data:{view}/data
 InaccessiblePaths={directory} /run/{name}
@@ -196,6 +197,23 @@ def _own(paths: list[Path], uid: int, gid: int) -> None:
         metadata = path.lstat()
         os.chown(path, uid, gid, follow_symlinks=False)
         path.chmod(0o700 if path.is_dir() else 0o600 | (metadata.st_mode & 0o100))
+
+
+def _worker_resource_files(instance: Path) -> tuple[str, ...]:
+    """Keep explicit worker read access only for trusted resource assignments."""
+    from .provisioner import RESERVED_RESOURCE_FILES, read_regular, validate_resource_files
+    resources = {}
+    for path in instance.iterdir():
+        if (path.suffix.lower() != ".json" or path.name.lower() in RESERVED_RESOURCE_FILES
+                or not path.stat().st_mode & stat.S_IRGRP):
+            continue
+        _trusted(path)
+        # Check the basename before opening it; regular-file and size checks
+        # match the operator provisioning boundary.
+        validate_resource_files({path.name: {}})
+        resources[path.name] = json.loads(read_regular(path, 1024 * 1024))
+    validate_resource_files(resources)
+    return tuple(resources)
 
 
 def _run(*args):
@@ -290,6 +308,7 @@ def install(directory: Path, *, name="oaw-hosted") -> None:
         if not (application / required).exists():
             raise ValueError(f"Complete setup, frontend build and prepare-runtime before installation: {required}")
     # Validate that worker configs actually describe the same immutable identities.
+    resource_files = {}
     for profile in settings.profiles:
         instance = directory / "instances" / profile.profile_id
         worker = json.loads((instance / "worker.json").read_text(encoding="utf-8"))
@@ -298,6 +317,7 @@ def install(directory: Path, *, name="oaw-hosted") -> None:
             raise ValueError("Worker configuration differs from its gateway identity or private data directory")
         if worker.get("public_origin") != settings.public_origin or not (instance / "worker.env").is_file():
             raise ValueError("Incomplete or inconsistent worker configuration")
+        resource_files[profile.profile_id] = _worker_resource_files(instance)
     for line in units["sysusers.conf"].splitlines():
         account, marker = line.split()[1], line.split('"')[1]
         try:
@@ -329,8 +349,9 @@ def install(directory: Path, *, name="oaw-hosted") -> None:
         user = pwd.getpwnam(service_user(name, profile.profile_id))
         os.chown(instance, 0, user.pw_gid)
         instance.chmod(0o750)
-        os.chown(instance / "worker.json", 0, user.pw_gid)
-        (instance / "worker.json").chmod(0o640)
+        for filename in ("worker.json", *resource_files[profile.profile_id]):
+            os.chown(instance / filename, 0, user.pw_gid)
+            (instance / filename).chmod(0o640)
         _own(_plain_tree(instance / "data"), user.pw_uid, user.pw_gid)
     for filename in units:
         if filename != "sysusers.conf":
