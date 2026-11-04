@@ -4,7 +4,7 @@ import { t, useLocale } from '../i18n';
 import { configureWorkspaceApi, normalizeCard, normalizeEdge } from '../api/client';
 import { WorkspaceWindow } from '../legions/LegionWorkspace';
 import { WorkspaceAccess, type PluginDeploymentAccess } from '../workspace/WorkspaceAccess';
-import { useWorldStore } from '../state/worldStore';
+import { isOlder, useWorldStore } from '../state/worldStore';
 import { ToastStack } from '../shell/ToastStack';
 import { BackendUnavailableNotice } from '../shell/BackendUnavailableNotice';
 import type { PluginCatalog, WorldCard, WorldEdge } from '../types/world';
@@ -12,6 +12,7 @@ import { deploymentRequest } from './api';
 import './deployment.css';
 import { isHosted } from '../auth/hostedSession';
 import { AccountButton } from '../auth/AccountButton';
+import { useApplicationAppearance } from '../shell/useAppearance';
 
 type PublishedWorkspace = {
   id: string; name: string; cards: WorldCard[]; legion: WorldCard; legions?: WorldCard[];
@@ -22,6 +23,7 @@ type PublishedWorkspace = {
 
 /** Authentication and scoped data bootstrap; all workspace rendering stays shared. */
 export function RuntimeApp({ name }: { name: string }) {
+  useApplicationAppearance();
   const locale = useLocale(state => state.locale);
   const theme = useWorldStore(state => state.theme);
   const [app, setApp] = useState<PublishedWorkspace>();
@@ -57,12 +59,15 @@ export function RuntimeApp({ name }: { name: string }) {
     if (!app) return;
     const controller = new AbortController();
     const timer = window.setInterval(() => {
+      const before = new Map(useWorldStore.getState().cards.map(card => [card.id, card]));
       void deploymentRequest<PublishedWorkspace>('/runtime-app', { signal: controller.signal }).then(value => {
         if (controller.signal.aborted) return;
         const byId = new Map(value.cards.map(card => [card.id, card]));
         useWorldStore.setState(state => ({ cards: state.cards.map(card => {
           const live = byId.get(card.id);
-          return live ? { ...card, status: live.status, config: { ...card.config, ...live.config } } : card;
+          // An edit (including an optimistic save) made during this read wins.
+          return live && before.get(card.id) === card && !isOlder(live, card)
+            ? { ...card, revision: live.revision, status: live.status, config: { ...card.config, ...live.config } } : card;
         }) }));
       }).catch(() => {});
     }, 3000);

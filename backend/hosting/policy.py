@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 _HOST_FIELDS = frozenset({"workspace_path", "workspace_root", "working_directory", "cwd", "project_path",
                           "host_path", "local_path", "folders", "folder_bindings", "plugin_directories"})
 _BLOCKED_PREFIXES = ("/api/desktop", "/api/settings/storage", "/api/diagnostics", "/api/development",
-                     "/api/store", "/api/runtime/python/plugins", "/api/settings/sandbox")
+                     "/api/store", "/api/runtime/python/plugins", "/api/settings/sandbox", "/api/application/restart")
 _PACK_ASSET = re.compile(r"/api/packs/[^/]+/versions/[^/]+/.+")
 _NODE_ACTION = re.compile(r"/api/(?:runtime-app/workspace/)?nodes/[^/]+/(?:actions|resource)/[^/]+")
 # Pack actions carry uploads as base64 JSON (up to 32 MiB decoded). Their
@@ -46,8 +46,8 @@ def unsafe_host_configuration(value) -> bool:
 class HostedPolicyMiddleware:
     """Deny host management even when an authenticated user constructs requests."""
 
-    def __init__(self, app):
-        self.app = app
+    def __init__(self, app, *, managed_models=False):
+        self.app, self.managed_models = app, managed_models
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in {"http", "websocket"}:
@@ -70,6 +70,8 @@ class HostedPolicyMiddleware:
         blocked |= path.endswith(("/environment-folders", "/files/open-folder"))
         blocked |= bool(re.fullmatch(r"/api/sandboxes/[^/]+/diagnostics", path))
         blocked |= path == "/ws/visual"  # Desktop observation is an operator feature.
+        blocked |= (self.managed_models and method not in {"GET", "HEAD", "OPTIONS"}
+                    and (path == "/api/settings/llm" or path == "/api/settings/models" or path.startswith("/api/settings/models/")))
         if blocked:
             return await self._deny(scope, receive, send)
         # Inspect only configuration-bearing routes. Binary attachments and user
