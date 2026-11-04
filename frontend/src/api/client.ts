@@ -307,6 +307,9 @@ function unwrap<T>(input: unknown, key: string): T {
 }
 
 export const worldApi = {
+  restartApplication(): Promise<{ instance_id: string }> {
+    return request('/application/restart', { method: 'POST', headers: { 'X-OAW-Restart': '1' } });
+  },
   listPackProjects(): Promise<import('../factory/projectTypes').ProjectList> {
     return request('/packs/projects', { headers: { 'X-OAW-Pack-Install': '1' } });
   },

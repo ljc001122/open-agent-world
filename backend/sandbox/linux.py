@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .base import SandboxBackend, SandboxEventSink
+from .resource_validation import validate_resource_source
 from .materialization import RuntimeMount, materialize_bundle, cleanup_materializations
 from .linux_network import NETWORK_ERROR_MARKER, ca_bundle, network_payload, network_prerequisites
 from .models import (
@@ -937,18 +938,7 @@ class LinuxSandboxBackend(SandboxBackend):
                         raise SandboxValidationError(f"workspace contains a hard-linked file: {entry.path}")
 
     def _validate_source(self, source: Path, *, must_exist: bool = True) -> Path:
-        if source.is_symlink():
-            raise SandboxValidationError("resource symlinks are not allowed")
-        try:
-            resolved = source.resolve(strict=must_exist)
-        except OSError as exc:
-            raise SandboxValidationError("managed resource does not exist") from exc
-        self._assert_within(resolved, self._managed_root)
-        if (any(resolved.is_relative_to(self._managed_root / name)
-                for name in ("sandbox-runtimes", "sandboxes", "sandbox-bindings", "runtime"))
-                or (must_exist and not resolved.is_file())):
-            raise SandboxValidationError("only regular managed resource files can be attached")
-        return resolved
+        return validate_resource_source(source, self._managed_root, must_exist=must_exist)
 
     def _validate_record_paths(self, record: _Record) -> None:
         self._assert_within(record.root.resolve(), self._root)

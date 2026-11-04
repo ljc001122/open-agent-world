@@ -8083,5 +8083,14 @@
   "One absolute Sandbox directory per line": ["One absolute Sandbox directory per line", "每行一个沙箱内的绝对目录路径"],
   "Keeps the Sandbox's base PATH. Directory separators are chosen by the runtime. Use Path to authorize a host folder.": ["Keeps the Sandbox's base PATH. Directory separators are chosen by the runtime. Use Path to authorize a host folder.", "保留沙箱的基础 PATH，分隔符由运行环境自动选择。需要授权主机目录时，请选择“路径”类型。"],
   "Prepended directories take priority over existing commands with the same name.": ["Prepended directories take priority over existing commands with the same name.", "前置目录中的同名命令会优先使用。"],
-  "Composed when each command runs.": ["Composed when each command runs.", "在每次执行命令时合成。"]
+  "Composed when each command runs.": ["Composed when each command runs.", "在每次执行命令时合成。"],
+  "Restart OAW now?": ["Restart OAW now?", "是否现在重启 OAW？"],
+  "Restart later": ["Restart later", "稍后重启"],
+  "Restart now": ["Restart now", "现在重启"],
+  "Restarting…": ["Restarting…", "正在重启…"],
+  "Installation complete. Restart OAW to activate the new cards.": ["Installation complete. Restart OAW to activate the new cards.", "安装完成，重启 OAW 后即可使用新卡片。"],
+  "Save your work before restarting. Running tasks will stop, and this page will refresh automatically.": ["Save your work before restarting. Running tasks will stop, and this page will refresh automatically.", "请先保存当前编辑。重启会停止运行中的任务，完成后页面将自动刷新。"],
+  "Automatic restart is unavailable. Restart OAW using its launcher.": ["Automatic restart is unavailable. Restart OAW using its launcher.", "当前启动方式不支持自动重启，请通过启动器重新启动 OAW。"],
+  "Restarting OAW. This page will refresh when ready.": ["Restarting OAW. This page will refresh when ready.", "正在重启 OAW，恢复后页面将自动刷新。"],
+  "OAW has not restarted yet. Check the launcher log, then refresh this page.": ["OAW has not restarted yet. Check the launcher log, then refresh this page.", "OAW 尚未恢复，请检查启动器日志后刷新页面。"]
 }

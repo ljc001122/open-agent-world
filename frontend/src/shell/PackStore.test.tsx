@@ -55,13 +55,15 @@ it('displays requirements and installs an explicit version with restart state', 
   vi.spyOn(worldApi, 'getStorePack').mockResolvedValue(detail);
   vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue(version);
   const install = vi.spyOn(worldApi, 'installStorePack').mockResolvedValue({ ...state, installed_version: '0.10.0', restart_required: true, can_install: false });
-  render(<PackStore />);
+  const installed = vi.fn();
+  render(<PackStore onInstalled={installed} />);
   fireEvent.click(await screen.findByRole('button', { name: 'View Greeter details' }));
   expect(await screen.findByText('colorama==0.4.6')).toBeTruthy();
   expect(screen.getByText('science.viewer >=1')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Get' }));
   expect(await screen.findByText('Installed · Restart required')).toBeTruthy();
   expect(install.mock.calls[0].slice(0, 2)).toEqual([pack.id, '0.10.0']);
+  expect(installed).toHaveBeenCalledWith(expect.objectContaining({ restart_required: true }));
   expect((screen.getByRole('button', { name: 'Installed' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Back to Store' }));
   expect(screen.getByText('Restart required').closest('.library-pack')?.getAttribute('data-pack-notice')).toBe('restart');
@@ -72,12 +74,14 @@ it('uses backend update decisions and contains a failed install', async () => {
   vi.spyOn(worldApi, 'getStorePack').mockResolvedValue({ ...detail, installed_version: '0.9.0', update_available: true });
   vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue(version);
   const install = vi.spyOn(worldApi, 'installStorePack').mockRejectedValue(new Error('Pack requires missing dependency'));
-  render(<PackStore />);
+  const installed = vi.fn();
+  render(<PackStore onInstalled={installed} />);
   fireEvent.click(await screen.findByRole('button', { name: 'View Greeter details' }));
   expect(install).not.toHaveBeenCalled();
   fireEvent.click(await screen.findByRole('button', { name: 'Update' }));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Pack requires missing dependency');
   expect((screen.getByRole('button', { name: 'Update' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(installed).not.toHaveBeenCalled();
 });
 
 it('shows the same environment plan as local installs and blocks an unresolved dependency', async () => {

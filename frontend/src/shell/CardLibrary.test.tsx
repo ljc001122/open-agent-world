@@ -64,11 +64,30 @@ it('adds an installed file to the inventory immediately and closes its installat
   expect(within(pack).getByText('Restart required')).toBeTruthy();
   expect(container.querySelector('.pack-install-popover')).toBeNull();
   expect(container.querySelector('.pack-installer')).toBeNull();
+  expect(screen.getByRole('dialog', { name: 'Restart OAW now?' })).toBeTruthy();
+  const restart = vi.spyOn(worldApi, 'restartApplication');
+  fireEvent.click(screen.getByRole('button', { name: 'Restart later' }));
+  expect(screen.queryByRole('dialog', { name: 'Restart OAW now?' })).toBeNull();
+  expect(restart).not.toHaveBeenCalled();
   expect(screen.getByRole('button', { name: 'Install Pack from File...' }).hasAttribute('disabled')).toBe(false);
   expect(screen.queryByRole('button', { name: 'Uninstall Pack' })).toBeNull();
   fireEvent.click(within(pack).getByRole('button', { name: /^(Tear open|View pack)/ }));
   expect(screen.getByRole('button', { name: 'Uninstall Pack' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Open pack' })).toBeNull();
+});
+
+it('does not ask to restart after a Pack becomes available immediately', async () => {
+  useCardLibrary.setState({ snapshot: snapshot(), open: true, tab: 'packs', refresh: async () => {} });
+  useWorldStore.setState({ legions: [] });
+  vi.spyOn(worldApi, 'inspectPack').mockResolvedValue({ manifest: installedContentPack, sha256: 'digest' });
+  vi.spyOn(worldApi, 'installPack').mockResolvedValue({ restart_required: false, versions: [{ ...installedContentPack, loaded: true }] });
+  render(<CardLibrary />);
+  const file = new File(['zip'], 'research.oawpack');
+  vi.spyOn(file, 'slice').mockReturnValue({ arrayBuffer: async () => new Uint8Array([0x50, 0x4b, 3, 4]).buffer } as Blob);
+  await act(async () => fireEvent.change(screen.getByLabelText('Pack file'), { target: { files: [file] } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Install Pack' })));
+  expect(screen.getByRole('article', { name: 'Research kit' })).toBeTruthy();
+  expect(screen.queryByRole('dialog', { name: 'Restart OAW now?' })).toBeNull();
 });
 
 it('opens installed packs and browses their cards before entering secondary management', async () => {

@@ -69,7 +69,23 @@ router = APIRouter(prefix="/api/application", tags=["application"])
 
 @router.get("")
 def get_application(request: Request, services=Depends(get_services)):
-    return {**application_snapshot(services), "hosted": bool(getattr(request.app.state, "hosted", False))}
+    return {**application_snapshot(services), "hosted": bool(getattr(request.app.state, "hosted", False)),
+            "instance_id": request.app.state.instance_id,
+            "restart_supported": request.app.state.restart is not None}
+
+
+@router.post("/restart", status_code=202)
+async def restart_application(request: Request):
+    from backend.api.desktop import _require_local_desktop
+    _require_local_desktop(request)
+    if request.headers.get("x-oaw-restart") != "1":
+        raise HTTPException(403, "Restart requires an explicit host request")
+    restart = request.app.state.restart
+    if restart is None:
+        raise HTTPException(409, "Automatic restart is unavailable. Restart OAW using its launcher.")
+    request.app.state.restarting = True
+    restart()
+    return {"instance_id": request.app.state.instance_id}
 
 
 @router.patch("/preferences")

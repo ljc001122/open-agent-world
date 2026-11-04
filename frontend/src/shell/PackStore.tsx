@@ -17,7 +17,9 @@ function InstallationStatus({ state }: { state: StoreState }) {
   </span>;
 }
 
-export function PackStore({ installations }: { installations?: PackInstallations }) {
+export function PackStore({ installations, onInstalled }: {
+  installations?: PackInstallations; onInstalled?: (state: StoreState) => void;
+}) {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState<StorePage>();
   const [loading, setLoading] = useState(false);
@@ -85,7 +87,10 @@ export function PackStore({ installations }: { installations?: PackInstallations
     setInstalling(pack.id); setInstallError('');
     try {
       const result = await worldApi.installStorePack(pack.id, pack.available_version, controller.signal);
-      if (!controller.signal.aborted) setInstalled(current => ({ ...current, [pack.id]: result }));
+      if (!controller.signal.aborted) {
+        setInstalled(current => ({ ...current, [pack.id]: result }));
+        onInstalled?.(result);
+      }
     } catch (cause) { if (!controller.signal.aborted) setInstallError(apiErrorMessage(cause)); }
     finally { if (!controller.signal.aborted) { setInstalling(undefined); installRequest.current = undefined; } }
   };
