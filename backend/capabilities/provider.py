@@ -164,6 +164,10 @@ class _CapabilityContext:
         from backend.plugins.summoning import SummoningAction
         return await self.services.summoning.action(capability.target_id, _validate_tool_request(SummoningAction, arguments), capability=capability)
 
+    async def run_history_action(self, capability, action, arguments):
+        from backend.runs.tools import invoke
+        return await invoke(self.services, capability, action, arguments)
+
     async def node_execution_action(self, capability, action, arguments):
         from backend.node_execution import ExecutionRequest
         service = self.services.node_execution

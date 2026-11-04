@@ -45,6 +45,13 @@ to new sessions; existing sessions keep their historical files and document
 scope. **View workspace** offers Total workspace and Current session. Changing
 these settings does not prepare another Python environment.
 
+## Log review Agent
+
+The Pack also includes **Report Agent**. Connect Read run history to the source Agent and authorize a Sandbox to generate
+a simple structure → brief decision/action → structure report, with original
+structure files, previews and CSV/JSON data for a later article. It uses the native Agent runtime and
+its own private Skill toolbox. See [setup, outputs and provenance](docs/log-review.md).
+
 ## Boundaries
 
 The diagonal supercell action is deterministic. Surface, interface, SMILES and

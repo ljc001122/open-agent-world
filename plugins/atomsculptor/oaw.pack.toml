@@ -12,7 +12,7 @@ name = "AtomSculptor"
 [plugin]
 owner = "atomsculptor"
 packs = ["atomsculptor.default"]
-node_types = ["atomsculptor.agent","atomsculptor.skills","atomsculptor.skills.skill","atomsculptor.structure"]
+node_types = ["atomsculptor.agent","atomsculptor.skills","atomsculptor.skills.skill","atomsculptor.structure","atomsculptor.log-review-agent","atomsculptor.review-skills","atomsculptor.review-skills.skill"]
 
 [components.backend]
 project = "pyproject.toml"
@@ -44,6 +44,18 @@ description = "A Materials Project API key configured for the skill."
 
 [features.agent]
 environments = ["modelling"]
+prerequisites = ["model-connection"]
+
+[environments.log-review]
+target = "sandbox"
+provider = "python"
+management = "legacy-shared"
+prepare = "on-use"
+python = ["ase>=3.22", "matplotlib>=3.7", "numpy>=1.23"]
+verify_imports = ["ase", "matplotlib", "numpy"]
+
+[features.log-review]
+environments = ["log-review"]
 prerequisites = ["model-connection"]
 
 [environments.crystal-builder]

@@ -1200,6 +1200,8 @@ class CorePlugin:
         from backend.plugins.shadow_collection import register_shadow_collection
         register_shadow_collection(registration)
         _register_builtin(registration)
+        from backend.runs.tools import register_run_history
+        register_run_history(registration)
         from backend.file_preview import register_file_preview
         register_file_preview(registration)
         from backend.execution_graph import register as register_execution_graph

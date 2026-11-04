@@ -6,7 +6,7 @@ import pytest
 
 from backend.capabilities.provider import WorldAgentCapabilityProvider, _CapabilityContext
 from backend.errors import ResourceValidationError
-from backend.runs import InvocationContext, InvocationCaller
+from backend.runs import InvocationContext, InvocationCaller, RunStatus
 from backend.runs.manager import _current_invocation
 from backend.sandbox.task_workspace import initial_policy, binding
 from backend.sandbox.files import working_path, command_path
@@ -241,3 +241,81 @@ def test_artifact_versions_keep_portable_paths_and_materialize_into_the_consumin
             assert result["destination"] == "inputs"
             assert (root / "Default session" / "inputs/outputs/result.txt").read_text() == "produced"
     client.portal.call(scenario)
+
+
+def test_report_collects_only_the_selected_task_and_explicit_continuation_chain(runtime_client, tmp_path):
+    import json
+    from backend.tests.test_agent_run_history_tools import saved_run, connect
+    client, backend, _ = runtime_client
+    source, sandbox, *_ = setup_skill(client)
+    reviewer = create_node(client, "atomsculptor.log-review-agent")
+    connect(client, reviewer, source, "agent.run_history")
+    connect(client, reviewer, sandbox, "execute")
+    services = client.app.state.services
+    provider = WorldAgentCapabilityProvider(services)
+    foreign = new_run(services, source, legacy=True)
+    first = saved_run(services, source, sandbox)
+    first = services.run_manager.store.update_lifecycle(first.run_id, task_workspace=initial_policy(services.run_manager.store, agent_id=first.agent_id, run_id=first.run_id, caller_kind=first.caller_kind))
+    services.run_manager.store.update_status(first.run_id, RunStatus.FAILED)
+    latest = saved_run(services, source, sandbox)
+    latest = services.run_manager.store.update_lifecycle(latest.run_id, continuation_run_id=first.run_id,
+        task_workspace=initial_policy(services.run_manager.store, agent_id=latest.agent_id, run_id=latest.run_id, caller_kind=latest.caller_kind, lifecycle={"continuation_run_id": first.run_id}))
+    review_run = new_run(services, reviewer)
+    root = backend._sandboxes_root / sandbox["id"] / "workspace"
+    (root / "shared").mkdir()
+    (root / "shared/explicit.txt").write_text("shared input")
+    (root / "shared/unrelated.txt").write_text("not selected")
+    async def scenario():
+        for run, path in ((foreign, "other-task.txt"), (first, "scripts/first.py"), (latest, "outputs/final.extxyz")):
+            with in_run(run):
+                await provider.invoke_tool(source["id"], "operation:write_sandbox_text_file",
+                    {"sandbox": sandbox["id"], "path": path, "content":
+                     '1\nProperties=species:S:1:pos:R:3\nCu 0 0 0\n' if path.endswith('.extxyz') else "saved data"})
+        with in_run(latest):
+            read = await provider.invoke_tool(source["id"], "operation:read_sandbox_file",
+                {"sandbox": sandbox["id"], "scope": "shared", "path": "explicit.txt"})
+            assert read["text"] == "shared input"
+        with in_run(review_run):
+            return await provider.invoke_tool(reviewer["id"], "operation:export_agent_run",
+                {"agent": source["id"], "sandbox": sandbox["id"], "run_id": latest.run_id})
+    receipt = client.portal.call(scenario)
+    root = backend._sandboxes_root / sandbox["id"] / "workspace"
+    archive = root / "Default session" / receipt["archive_path"]
+    assert receipt["run_ids"] == [first.run_id, latest.run_id]
+    assert receipt["suggested_output_folder"].startswith("reports/")
+    collection = json.loads((archive / "collection.json").read_text())
+    assert collection["source_directories"][sandbox["id"]] == ["Default session"]
+    assert receipt["collected_files"] == 3
+    assert not list(archive.rglob("other-task.txt"))
+    assert not list(archive.rglob("unrelated.txt"))
+    assert list(archive.rglob("explicit.txt"))
+    assert list(archive.rglob("final.extxyz")) and list(archive.rglob("first.py"))
+    # Cross the real exporter/packaged CLI boundary using the same task-relative
+    # paths a model receives. No source modelling program is executed.
+    import subprocess
+    import sys
+    from oaw_atomsculptor.review_agent import log_review_skills
+    scripts = tmp_path / "review-bundle"
+    for name, content in log_review_skills().skills[0].files.items():
+        path = scripts / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    task_root = root / "Default session"
+    cli = scripts / "scripts/log_review.py"
+    inspection = subprocess.run([sys.executable, str(cli), "inspect_archive", "--folder", receipt["archive_path"]],
+        cwd=task_root, capture_output=True, text=True, timeout=30)
+    assert inspection.returncode == 0, inspection.stderr
+    inspected = json.loads(inspection.stdout)
+    draft_path = task_root / inspected["manifest_file"]
+    draft = json.loads(draft_path.read_text())
+    draft["nodes"][-1]["structures"] = [{"path": str(next(archive.rglob("final.extxyz")).relative_to(archive)),
+        "provenance": "collection_snapshot", "note": "Current saved-file preview, not an earlier version."}]
+    draft_path.write_text(json.dumps(draft))
+    built = subprocess.run([sys.executable, str(cli), "build_review", "--folder", receipt["archive_path"],
+        "--manifest-file", inspected["manifest_file"], "--output-folder", receipt["suggested_output_folder"]],
+        cwd=task_root, capture_output=True, text=True, timeout=60)
+    assert built.returncode == 0, built.stderr
+    result = json.loads(built.stdout)
+    assert result["statistics"]["attempts"] == 2 and result["previews"] == 1
+    assert (task_root / result["report"]).is_file()
+    assert (task_root / result["bundle"]).is_file()

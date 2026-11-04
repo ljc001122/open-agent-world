@@ -316,6 +316,8 @@ class AtomSculptorPlugin:
     )
 
     def register(self, registration) -> None:
+        from .review_agent import register_log_review
+        register_log_review(registration)
         registration.register_runtime_provider(
             "atomsculptor.adk-team",
             AtomSculptorRuntime,
@@ -487,9 +489,11 @@ class AtomSculptorPlugin:
                 templateable=True,
             )
         )
-        # Keep the automatically equipped toolbox internal in the native catalog.
-        registration.nodes["atomsculptor.skills"] = replace(
-            registration.nodes["atomsculptor.skills"], user_creatable=False)
+        # Equipment ownership and catalog visibility are separate. Keep both
+        # auto-equipped toolbox types internal using the native catalog flag.
+        for toolbox_type in ("atomsculptor.skills", "atomsculptor.review-skills"):
+            registration.nodes[toolbox_type] = replace(
+                registration.nodes[toolbox_type], user_creatable=False)
         registration.register_pack(
             PackDefinition(
                 id="atomsculptor.default",
