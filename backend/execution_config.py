@@ -136,23 +136,29 @@ def linked_environment(services, sandbox_id):
     return profiles[0] if profiles else None
 
 
-def effective_variable_steps(services, sandbox_id, environment_id=None):
+def shared_environment(services):
+    source = services.execution_environment_source
+    return source.read() if source is not None else None
+
+
+def _effective_variable_steps(services, sandbox_id, environment_id, shared):
     from backend.node_documents import read_document
     from backend.sandbox.settings import SandboxSettingsStore
     from backend.sandbox.environment import HOST_ENVIRONMENT_NAMES
     profile_id = environment_id or linked_environment(services, sandbox_id)
-    layers = [(profile_id, "invocation" if environment_id else "linked"), (sandbox_id, "local")]
     defaults = SandboxSettingsStore(services.database, services.settings.data_root).read()
-    effective = {name.upper(): [(name, value, "global", "global")]
-                 for name, value in defaults.environment_variables.items()
-                 if name.upper() not in HOST_ENVIRONMENT_NAMES}
-    for node_id, source in layers:
-        if node_id is None:
-            continue
-        profile = EnvironmentProfile.model_validate(read_document(services, node_id)["value"])
-        for name, value in profile.variables.items():
+    layers = [("shared", "shared", shared.variables if shared else {}),
+              ("global", "global", {name: value for name, value in defaults.environment_variables.items()
+                                    if name.upper() not in HOST_ENVIRONMENT_NAMES})]
+    for node_id, source in ((profile_id, "invocation" if environment_id else "linked"), (sandbox_id, "local")):
+        if node_id is not None:
+            profile = EnvironmentProfile.model_validate(read_document(services, node_id)["value"])
+            layers.append((node_id, source, profile.variables))
+    effective = {}
+    for owner, source, variables in layers:
+        for name, value in variables.items():
             # Replacement discards lower layers before any private bindings are read.
-            step = (name, value, node_id, source)
+            step = (name, value, owner, source)
             if getattr(value, "operation", "replace") == "replace":
                 effective[name.upper()] = [step]
             else:
@@ -161,12 +167,13 @@ def effective_variable_steps(services, sandbox_id, environment_id=None):
 
 
 def effective_variables(services, sandbox_id, environment_id=None):
-    profile_id, chains = effective_variable_steps(services, sandbox_id, environment_id)
+    profile_id, chains = _effective_variable_steps(services, sandbox_id, environment_id, shared_environment(services))
     return profile_id, [chain[-1] for chain in chains]
 
 
 def resolve_sandbox_configuration(services, sandbox_id, environment_id=None, target_id=None, *, folder_mounts=None):
-    _, chains = effective_variable_steps(services, sandbox_id, environment_id)
+    shared = shared_environment(services)
+    _, chains = _effective_variable_steps(services, sandbox_id, environment_id, shared)
     environment, secrets = {}, []
     for chain in chains:
         name = chain[-1][0]
@@ -184,7 +191,9 @@ def resolve_sandbox_configuration(services, sandbox_id, environment_id=None, tar
                 folder_mounts.append(FolderMount(name, binding.path, binding.access, binding.kind, index if structured else None))
                 text = binding.path
             if isinstance(value, SecretRequirement):
-                if source == "global":
+                if source == "shared":
+                    text = shared.secrets[value.secret_ref]
+                elif source == "global":
                     from backend.security.execution_credentials import GlobalExecutionCredentialStore
                     text = GlobalExecutionCredentialStore(services.database, services.settings.data_root).resolve(None, value.secret_ref)
                 else:
@@ -199,7 +208,7 @@ def resolve_sandbox_configuration(services, sandbox_id, environment_id=None, tar
     return environment, tuple(secrets)
 
 
-def _configuration_summaries(services, variables):
+def _configuration_summaries(services, variables, shared):
     from backend.security.execution_credentials import GlobalExecutionCredentialStore
     global_credentials = GlobalExecutionCredentialStore(services.database, services.settings.data_root)
     result = []
@@ -235,13 +244,15 @@ def _configuration_summaries(services, variables):
             **({"access": folder_access, "error": folder_error, "available": available,
                 "status": "unconfigured" if not configured else "path_unavailable" if available is False else "configured",
                 "validation_scope": "host_path"} if folder else {}),
-            "configured": (global_credentials if source == "global" else services.execution_credentials).configured(owner, value.secret_ref) if secret else configured})
+            "configured": (value.secret_ref in shared.secrets if source == "shared" else
+                           (global_credentials if source == "global" else services.execution_credentials).configured(owner, value.secret_ref)) if secret else configured})
     return result
 
 
 def configuration_summary(services, sandbox_id):
-    profile_id, chains = effective_variable_steps(services, sandbox_id)
-    summaries = iter(_configuration_summaries(services, [step for chain in chains for step in chain]))
+    shared = shared_environment(services)
+    profile_id, chains = _effective_variable_steps(services, sandbox_id, None, shared)
+    summaries = iter(_configuration_summaries(services, [step for chain in chains for step in chain], shared))
     result = []
     for chain in chains:
         steps = [next(summaries) for _ in chain]

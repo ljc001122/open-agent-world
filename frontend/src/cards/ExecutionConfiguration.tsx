@@ -125,7 +125,7 @@ export function EnvironmentVariablesEditor({ rows, onChange, disabled, secrets, 
   const known: Record<string, string> = { PATH: "runtime",
     ...Object.fromEntries(Object.entries(context).filter(([, source]) => !existingVariables || source === "runtime")), ...existingVariables };
   const sourceLabel = (source: string) => source === "runtime" ? t("Sandbox runtime") : source === "global" ? t("Global defaults")
-    : source === "linked" || source === "invocation" ? t("Environment Profile") : t("This configuration");
+    : source === "shared" ? t("Shared environment") : source === "linked" || source === "invocation" ? t("Environment Profile") : t("This configuration");
   const latestRows = useRef(rows);
   const latestOnChange = useRef(onChange);
   latestRows.current = rows;
