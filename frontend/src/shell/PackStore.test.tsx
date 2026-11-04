@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { worldApi } from '../api/client';
 import { PackStore } from './PackStore';
@@ -31,7 +31,7 @@ it('uses authored packaging and artwork in the catalog and the reviewed version 
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-packaging')).toBe('premium');
   expect(view.container.querySelector('.library-pack')?.getAttribute('style')).toContain('#aa3366');
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-renderer')).toBe('fallback');
-  expect(paintPackCover).toHaveBeenLastCalledWith(expect.any(HTMLCanvasElement), expect.objectContaining({ icon: iconUrl, artwork: artworkUrl }));
+  await waitFor(() => expect(paintPackCover).toHaveBeenLastCalledWith(expect.any(HTMLCanvasElement), expect.objectContaining({ icon: iconUrl, artwork: artworkUrl })));
   const copy = view.container.querySelector('.pack-catalog-copy')!;
   expect(copy.textContent).toBe(pack.name);
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-pack-version')).toBe('0.10.0');
@@ -89,7 +89,7 @@ it('displays requirements and installs an explicit version with restart state', 
 it('uses backend update decisions and contains a failed install', async () => {
   vi.spyOn(worldApi, 'getStorePacks').mockResolvedValue({ items: [{ ...pack, installed_version: '0.9.0', update_available: true }], next_cursor: null });
   vi.spyOn(worldApi, 'getStorePack').mockResolvedValue({ ...detail, installed_version: '0.9.0', update_available: true });
-  vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue(version);
+  vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue({ ...version, installed_version: '0.9.0', update_available: true });
   const install = vi.spyOn(worldApi, 'installStorePack').mockRejectedValue(new Error('Pack requires missing dependency'));
   const installed = vi.fn();
   render(<PackStore onInstalled={installed} />);
@@ -116,8 +116,56 @@ it('shows the same environment plan as local installs and blocks an unresolved d
   expect(await screen.findByRole('region', { name: 'Installation plan' })).toBeTruthy();
   expect(screen.getByText('Prepared when used')).toBeTruthy();
   expect(screen.getByRole('alert').textContent).toContain('Install science.viewer first');
-  expect((screen.getByRole('button', { name: 'Get' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Unavailable' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(within(screen.getByRole('complementary', { name: 'Install Pack' })).getByRole('alert').textContent).toContain('Install science.viewer first');
   expect(install).not.toHaveBeenCalled();
+});
+
+it('explains an incompatible latest version next to the action and reinstalls a compatible version', async () => {
+  vi.spyOn(worldApi, 'getStorePacks').mockResolvedValue({ items: [pack], next_cursor: null });
+  vi.spyOn(worldApi, 'getStorePack').mockResolvedValue({ ...detail, versions: ['0.10.0', '0.9.0'] });
+  const metadata = vi.spyOn(worldApi, 'getStoreVersion').mockImplementation(async (_id, requested) => requested === '0.9.0'
+    ? { ...version, version: '0.9.0', available_version: '0.9.0' }
+    : { ...version, can_install: false, plan: {
+      pack_id: pack.id, name: pack.name, version: version.version, source: 'store', restart_required: true,
+      dependencies: [], environments: [], warnings: [],
+      blockers: ['Pack requires Plugin API 1.43; host provides 1.42. Upgrade OAW before installing.'],
+    } });
+  const install = vi.spyOn(worldApi, 'installStorePack').mockResolvedValue({ ...state, installed_version: '0.9.0', available_version: '0.9.0', restart_required: true, can_install: false });
+  render(<PackStore />);
+  fireEvent.click(await screen.findByRole('button', { name: 'View Greeter details' }));
+  const action = await screen.findByRole('button', { name: 'Unavailable' });
+  const panel = screen.getByRole('complementary', { name: 'Install Pack' });
+  expect(within(panel).getByRole('alert').textContent).toContain('Requires Plugin API 1.43; this OAW provides 1.42. Upgrade OAW first.');
+  expect(action.getAttribute('aria-describedby')).toBe('store-install-reason');
+  expect((action as HTMLButtonElement).disabled).toBe(true);
+  expect(install).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Version'), { target: { value: '0.9.0' } });
+  const get = await screen.findByRole('button', { name: 'Get' });
+  expect((get as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(get);
+  await screen.findByRole('button', { name: 'Installed' });
+  expect(install.mock.calls[0].slice(0, 2)).toEqual([pack.id, '0.9.0']);
+  expect(metadata.mock.calls.at(-1)?.slice(0, 2)).toEqual([pack.id, '0.9.0']);
+});
+
+it('ignores a late version response after the user chooses a different version', async () => {
+  vi.spyOn(worldApi, 'getStorePacks').mockResolvedValue({ items: [pack], next_cursor: null });
+  vi.spyOn(worldApi, 'getStorePack').mockResolvedValue({ ...detail, versions: ['0.10.0', '0.9.0'] });
+  let resolveLatest!: (value: StoreVersion) => void;
+  const metadata = vi.spyOn(worldApi, 'getStoreVersion').mockImplementationOnce(() => new Promise(resolve => { resolveLatest = resolve; }))
+    .mockResolvedValue({ ...version, version: '0.9.0', available_version: '0.9.0' });
+  const install = vi.spyOn(worldApi, 'installStorePack').mockResolvedValue({ ...state, installed_version: '0.9.0', available_version: '0.9.0', can_install: false });
+  render(<PackStore />);
+  fireEvent.click(await screen.findByRole('button', { name: 'View Greeter details' }));
+  await vi.waitFor(() => expect(metadata).toHaveBeenCalledOnce());
+  fireEvent.change(screen.getByLabelText('Version'), { target: { value: '0.9.0' } });
+  await screen.findByRole('button', { name: 'Get' });
+  await act(async () => resolveLatest(version));
+  fireEvent.click(screen.getByRole('button', { name: 'Get' }));
+  await screen.findByRole('button', { name: 'Installed' });
+  expect(metadata.mock.calls[0][2]?.aborted).toBe(true);
+  expect(install.mock.calls[0].slice(0, 2)).toEqual([pack.id, '0.9.0']);
 });
 
 it('offers Retry after offline failure and recovers the catalog', async () => {
@@ -142,4 +190,23 @@ it('discards late search responses and aborts requests when leaving the Store', 
   expect(catalog.mock.calls[0][2]?.aborted).toBe(true);
   view.unmount();
   expect(catalog.mock.calls[1][2]?.aborted).toBe(true);
+});
+
+it('distinguishes acquisition from preparation and clears a stale pending hint after success', async () => {
+  vi.spyOn(worldApi, 'getStorePacks').mockResolvedValue({ items: [pack], next_cursor: null });
+  vi.spyOn(worldApi, 'getStorePack').mockResolvedValue(detail);
+  vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue(version);
+  let complete!: (value: StoreState) => void;
+  vi.spyOn(worldApi, 'installStorePack').mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+  const view = render(<PackStore />);
+  fireEvent.click(await screen.findByRole('button', { name: 'View Greeter details' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Get', exact: true }));
+  expect((screen.getByRole('button', { name: 'Getting Pack' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText('Getting the Pack (0.0 MB)…')).toBeTruthy();
+  view.rerender(<PackStore installations={{ restart_required: false, versions: [], operations: [{ id: 'operation', digest: '0'.repeat(64),
+    pack_id: pack.id, version: version.version, state: 'preparing', error: null, updated_at: 1 }] }} />);
+  expect((screen.getByRole('button', { name: 'Installing' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => complete({ ...state, installed_version: version.version, can_install: false, restart_required: true }));
+  expect((screen.getByRole('button', { name: 'Installed' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Installing' })).toBeNull();
 });
