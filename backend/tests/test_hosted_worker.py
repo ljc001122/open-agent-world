@@ -121,7 +121,7 @@ def test_hosted_denies_host_management_and_native_execution_config(tmp_path, mon
         for method, path in (("get", "/api/diagnostics"), ("get", "/api/settings/storage"),
                              ("post", "/api/application/restart"),
                              ("post", "/api/desktop/inspect-path"), ("post", "/api/packs/install"),
-                             ("get", "/api/store/packs"), ("put", "/api/settings/sandbox"),
+                             ("post", "/api/store/packs/example.pack/versions/1.0.0/install"), ("put", "/api/settings/sandbox"),
                              ("post", "/api/packs/factory/example/run"), ("post", "/api/runtime/python/plugins/reconcile")):
             assert getattr(client, method)(path, headers=supplied).status_code == 403, path
         for payload in ({"type": "sandbox", "config": {"workspace_path": "/other-user"}},

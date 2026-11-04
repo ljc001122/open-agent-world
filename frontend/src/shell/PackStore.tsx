@@ -17,8 +17,8 @@ function InstallationStatus({ state }: { state: StoreState }) {
   </span>;
 }
 
-export function PackStore({ installations, onInstalled }: {
-  installations?: PackInstallations; onInstalled?: (state: StoreState) => void;
+export function PackStore({ installations, onInstalled, readOnly = false }: {
+  installations?: PackInstallations; onInstalled?: (state: StoreState) => void; readOnly?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState<StorePage>();
@@ -94,7 +94,7 @@ export function PackStore({ installations, onInstalled }: {
     finally { if (!controller.signal.aborted) setLoading(false); }
   };
   const install = async (pack: StorePack) => {
-    if (!pack.available_version || installRequest.current) return;
+    if (readOnly || !pack.available_version || installRequest.current) return;
     const controller = new AbortController(); installRequest.current = controller;
     setInstalling(pack.id); setInstallError('');
     try {
@@ -114,6 +114,7 @@ export function PackStore({ installations, onInstalled }: {
       restart_required: recent.restart_required };
   };
   const action = (pack: StorePack) => {
+    if (readOnly) return <p>{t('Pack installation is managed by your hosting administrator.')}</p>;
     const pending = installations?.operations?.find(item => item.pack_id === pack.id && item.version === pack.available_version && packOperationPending(item));
     const selectedVersion = installations?.versions.some(item => item.id === pack.id && item.version === pack.available_version && item.selected)
       || pack.installed_version === pack.available_version && !pack.can_install;
@@ -154,8 +155,8 @@ export function PackStore({ installations, onInstalled }: {
             {shown.summary && <p className="pack-detail-summary">{shown.summary}</p>}
           </div>
         </header>
-        <aside className="pack-detail-panel" aria-label={t('Install Pack')}>
-          <div className="pack-detail-panel-heading"><h4>{t('Install Pack')}</h4><span className="pack-tag">.oawpack</span></div>
+        <aside className="pack-detail-panel" aria-label={t(readOnly ? 'Pack details' : 'Install Pack')}>
+          <div className="pack-detail-panel-heading"><h4>{t(readOnly ? 'Pack details' : 'Install Pack')}</h4><span className="pack-tag">.oawpack</span></div>
           {versionOptions.length > 1 && <label className="field-label"><span>{t('Version')}</span><select aria-label={t('Version')} value={versionChoice ?? ''} onChange={event => { setVersion(undefined); setVersionChoice(event.target.value); }}>
             {versionOptions.map(value => <option key={value} value={value}>v{value}</option>)}
           </select></label>}
