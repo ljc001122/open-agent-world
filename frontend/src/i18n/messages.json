@@ -8121,5 +8121,17 @@
   "Save your work before restarting. Running tasks will stop, and this page will refresh automatically.": ["Save your work before restarting. Running tasks will stop, and this page will refresh automatically.", "请先保存当前编辑。重启会停止运行中的任务，完成后页面将自动刷新。"],
   "Automatic restart is unavailable. Restart OAW using its launcher.": ["Automatic restart is unavailable. Restart OAW using its launcher.", "当前启动方式不支持自动重启，请通过启动器重新启动 OAW。"],
   "Restarting OAW. This page will refresh when ready.": ["Restarting OAW. This page will refresh when ready.", "正在重启 OAW，恢复后页面将自动刷新。"],
-  "OAW has not restarted yet. Check the launcher log, then refresh this page.": ["OAW has not restarted yet. Check the launcher log, then refresh this page.", "OAW 尚未恢复，请检查启动器日志后刷新页面。"]
+  "OAW has not restarted yet. Check the launcher log, then refresh this page.": ["OAW has not restarted yet. Check the launcher log, then refresh this page.", "OAW 尚未恢复，请检查启动器日志后刷新页面。"],
+  "Requires Plugin API {required}; this OAW provides {current}. Upgrade OAW first.": ["Requires Plugin API {required}; this OAW provides {current}. Upgrade OAW first.", "需要 Plugin API {required}，当前 OAW 提供 {current}。请先升级 OAW。"],
+  "Requires OAW {required}; current version is {current}. Upgrade OAW first.": ["Requires OAW {required}; current version is {current}. Upgrade OAW first.", "需要 OAW {required}，当前版本为 {current}。请先升级 OAW。"],
+  "Remove the card \"{name}\" before uninstalling this Pack.": ["Remove the card \"{name}\" before uninstalling this Pack.", "请先移除卡片“{name}”，再卸载此卡包。"],
+  "Another Pack is installing. Wait for it to finish.": ["Another Pack is installing. Wait for it to finish.", "另一个卡包正在安装，请等待完成。"],
+  "Installation is already in progress.": ["Installation is already in progress.", "安装正在进行中。"],
+  "This version cannot be installed on this host.": ["This version cannot be installed on this host.", "当前宿主无法安装此版本。"],
+  "Runtime is not ready.": ["Runtime is not ready.", "运行时尚未就绪。"],
+  "Retry {name} runtime": ["Retry {name} runtime", "重试 {name} 运行时"],
+  "Prepare {name} runtime": ["Prepare {name} runtime", "准备 {name} 运行时"],
+  "Preparing {name} runtime…": ["Preparing {name} runtime…", "正在准备 {name} 运行时…"],
+  "Getting Pack": ["Getting Pack", "正在获取卡包"],
+  "Getting the Pack ({size} MB)…": ["Getting the Pack ({size} MB)…", "正在获取卡包（{size} MB）…"]
 }
