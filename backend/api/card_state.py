@@ -16,17 +16,9 @@ async def workspace_context(node_id: str, services=Depends(get_services)):
     from backend.workspace_context import resolve_workspace
     async with services._node_mutation(read_only=True):
         services.world.require_available_card(services.world.get_card(node_id))
-        value = resolve_workspace(services, node_id, allow_unbound=True)
-        if value.get('sandbox_id') and value.get('writable_directory'):
-            from backend.sandbox.task_workspace import ensure_directory
-            from backend.sandbox.models import SandboxStateError, SandboxNotFoundError
-            from backend.card_state import state_session
-            try:
-                with state_session(value['session_id']):
-                    value = {**value, **(await ensure_directory(services, value['sandbox_id']))}
-            except (SandboxStateError, SandboxNotFoundError):
-                pass  # Viewing never provisions a runtime or prepares Python.
-        return value
+        # Reading a view resolves its scope but never materializes a directory.
+        # Native execution/file writers claim it only when actually used.
+        return resolve_workspace(services, node_id, allow_unbound=True)
 
 
 class StateWrite(BaseModel):

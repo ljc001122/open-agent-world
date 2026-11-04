@@ -517,9 +517,12 @@ async def upload_sandbox_file(sandbox_id: str, path: str, request: Request,
     from backend.workspace_context import assert_workspace_write
     from backend.card_state import active_state_session
     if services.run_manager.current_context is not None or active_state_session.get() is not None:
-        from backend.sandbox.task_workspace import ensure_directory
+        from backend.sandbox.task_workspace import binding, ensure_directory
         async with services._node_mutation():
-            await ensure_directory(services, sandbox_id)
+            previous = binding(services, sandbox_id)['directory']
+            assigned = (await ensure_directory(services, sandbox_id))['directory']
+            if previous and assigned != previous and (path == previous or path.startswith(previous + '/')):
+                path = assigned + path[len(previous):]
     assert_workspace_write(services, sandbox_id, path)
     if directory:
         async for chunk in request.stream():
@@ -527,7 +530,8 @@ async def upload_sandbox_file(sandbox_id: str, path: str, request: Request,
                 raise HTTPException(413, detail='Folders must have an empty body')
         async with services._node_mutation():
             services._require_card_type(sandbox_id, 'sandbox')
-            return await services._require_sandbox_backend().file_operation(sandbox_id, 'mkdir', path=path)
+            result = await services._require_sandbox_backend().file_operation(sandbox_id, 'mkdir', path=path)
+            return {**result, 'path': path}
     async with services.resources.artifacts.workspace(services, sandbox_id, None, allow_running=True):
         backend = services._require_sandbox_backend()
         async def step(operation, **options):
@@ -566,7 +570,7 @@ async def upload_sandbox_file(sandbox_id: str, path: str, request: Request,
             result, _ = await step('upload_commit',
                 staging=staged['staging'], expected=expected, offset=offset)
             committed = True
-            return result
+            return {**result, 'path': path}
         finally:
             if not committed:
                 cleanup = asyncio.create_task(backend.file_operation(sandbox_id, 'upload_abort', path=path,

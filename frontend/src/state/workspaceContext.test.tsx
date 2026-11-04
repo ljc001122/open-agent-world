@@ -17,7 +17,7 @@ const value = (session: string, group = false): WorkspaceContext => ({
   session_id: session, group_id: 'one', conversation_id: 'room', sandbox_id: sandbox.id,
 });
 beforeEach(() => {
-  useWorldStore.setState({ cards: [sandbox, conversation, agent], catalog: TEST_CATALOG, edges: [
+  useWorldStore.setState({ cards: [sandbox, conversation, agent], catalog: TEST_CATALOG, events: [], edges: [
     { id: 'execute', source: agent.id, target: sandbox.id, relationship: 'execute', direction: 'forward' },
     { id: 'join', source: agent.id, target: conversation.id, relationship: 'participate', direction: 'forward' },
   ] });
@@ -51,4 +51,23 @@ it('reports failed resolution without displaying the previous scope', async () =
   request.mockResolvedValue(value('restored'));
   act(() => result.current.reload());
   await waitFor(() => expect(result.current.value?.key).toBe('restored'));
+});
+
+it('refreshes renamed sessions and claimed command paths without discarding the current view while loading', async () => {
+  let finish!: (context: WorkspaceContext) => void;
+  const request = vi.spyOn(worldApi, 'workspaceContext').mockResolvedValueOnce({ ...value('a'), claimed: false })
+    .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue({ ...value('a'), directory: 'Named (a)', claimed: true });
+  const { result } = renderHook(() => useWorkspaceContext(sandbox.id));
+  await waitFor(() => expect(result.current.value?.key).toBe('a'));
+  act(() => useWorldStore.setState({ events: [{ id: 'rename', type: 'conversation_session_updated', session_id: 'a',
+    conversation_id: 'room', timestamp: '2026-11-04T00:00:00Z', payload: {} }] }));
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  expect(result.current.value?.key).toBe('a');
+  await act(async () => finish({ ...value('a'), directory: 'Named', claimed: false }));
+  expect(result.current.value?.directory).toBe('Named');
+  act(() => useWorldStore.setState({ events: [{ id: 'start', type: 'sandbox_command_started', sandbox_id: sandbox.id,
+    timestamp: '2026-11-04T00:00:01Z', payload: {} }] }));
+  await waitFor(() => expect(result.current.value?.directory).toBe('Named (a)'));
+  expect(result.current.value?.claimed).toBe(true);
 });

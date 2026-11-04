@@ -326,6 +326,22 @@ describe("Sandbox workspace interaction", () => {
     expect(move).toHaveBeenCalledTimes(1);
   });
 
+  it('continues an upload batch in the actual directory assigned on its first write', async () => {
+    const pending = { key: 'pending-session', directory: 'New session', label: 'New session', claimed: false,
+      scope_type: 'session' as const, scope_id: 'a', session_id: 'a', group_id: 'g', conversation_id: 'room', sandbox_id: card.id };
+    vi.mocked(worldApi.workspaceContext).mockResolvedValueOnce(pending)
+      .mockResolvedValue({ ...pending, directory: 'New session (a)', claimed: true });
+    const upload = vi.spyOn(worldApi, 'uploadSandboxEntry')
+      .mockResolvedValueOnce({ written: 1, path: 'New session (a)/a.txt' })
+      .mockResolvedValue({ written: 1, path: 'New session (a)/b.txt' });
+    render(<Workspace />);
+    await screen.findByRole('button', { name: 'first.txt' });
+    fireEvent.drop(screen.getByLabelText('Sandbox files'), { dataTransfer: { types: ['Files'], files: [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')] } });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(upload.mock.calls.map(call => call[1])).toEqual(['New session/a.txt', 'New session (a)/b.txt']);
+    await waitFor(() => expect(worldApi.workspaceContext).toHaveBeenCalledTimes(2));
+  });
+
   it('keeps a file batch running when switching to Settings and back', async () => {
     let finish!: () => void;
     const upload = vi.spyOn(worldApi, 'uploadSandboxEntry')

@@ -118,7 +118,7 @@ def _records(services, sandbox_id):
             continue
         kind = saved.get('scope_type') or ('shared' if not saved.get('directory') else 'session')
         identity = saved.get('scope_id') or ('*' if kind == 'shared' else session['group_id'] if kind == 'group' else session_id)
-        record = {'directory': saved['directory'], 'label': saved.get('label', session['title']), 'scope_type': kind, 'scope_id': identity, 'claimed': True,
+        record = {'directory': saved['directory'], 'label': saved.get('label', session['title']), 'scope_type': kind, 'scope_id': identity, 'claimed': saved.get('claimed', True),
             'session_id': session_id, 'group_id': saved.get('group_id', session['group_id']), 'conversation_id': session['conversation_id']}
         record['key'] = saved.get('key') or json.dumps([kind, None if kind == 'shared' else session['conversation_id'], identity], separators=(',', ':'))
         value['sessions'][session_id] = record
@@ -147,15 +147,27 @@ def _folder_name(title, identity, records):
 def _assign(session, mode, records):
     saved = records['sessions'].get(session['id'])
     if saved is not None:
-        return dict(saved)
+        # The scope survives organization changes; its unused pathname is only
+        # a proposal. Freeze that path at native directory claim, not at GET.
+        mode = saved['scope_type']
     identity = '*' if mode == 'shared' else session['group_id'] if mode == 'group' else session['id']
+    if saved:
+        identity = saved['scope_id']
     group = records['groups'].get(identity) if mode == 'group' else None
     title = session['group_title'] if mode == 'group' else session['title']
-    value = dict(group) if group else {
-        'scope_type': mode, 'scope_id': identity, 'directory': '' if mode == 'shared' else _folder_name(title, identity, records),
+    if mode == 'group' and identity != session['group_id']:
+        title = (saved or group)['label']  # Retain a historical group's identity.
+    value = dict(saved or group) if saved or group else {
+        'scope_type': mode, 'scope_id': identity, 'directory': '',
         'claimed': mode == 'shared',
         'key': json.dumps([mode, None if mode == 'shared' else session['conversation_id'], identity], separators=(',', ':')),
     }
+    if not value.get('claimed', True):
+        other = {'sessions': {key: item for key, item in records['sessions'].items() if item['key'] != value['key']}}
+        value['directory'] = _folder_name(title, identity, other)
+        for item in [*records['sessions'].values(), *records['groups'].values()]:
+            if item.get('key') == value['key'] and not item.get('claimed', True):
+                item.update(directory=value['directory'], label=title)
     value.update(session_id=session['id'], conversation_id=session['conversation_id'], group_id=session['group_id'], label=title)
     records['sessions'][session['id']] = value
     if mode == 'group':
@@ -219,23 +231,32 @@ async def claim_directory(services, sandbox_id, value):
     backend = services._require_sandbox_backend()
     scope, records = _records(services, sandbox_id)
     stored = records['sessions'].get(value.get('session_id'))
+    if stored and stored.get('key') == value.get('key'):
+        session = session_context(services, sandbox_id, value['session_id'])
+        # A Run may have inspected this workspace before the session was named.
+        # Reconcile its unclaimed proposal with the current title/peer claim.
+        value = {**value, **_assign(session, stored['scope_type'], records)}
+        directory = value['directory']
+        if value.get('writable_directory'):
+            value['writable_directory'] = directory
+        stored = records['sessions'][session['id']]
     if not stored or stored.get('directory') != directory or stored.get('claimed', True):
         await backend.file_operation(sandbox_id, 'mkdir', path=directory)
-        return value
-    original = directory
-    suffix = value.get('scope_id', 'workspace')[:8]
-    index = 0
-    while True:
-        try:
-            await backend.file_operation(sandbox_id, 'transfer_mkdir', path=directory)
-            break
-        except FileExistsError:
-            index += 1
-            directory = original + ' (' + suffix + (f'-{index}' if index > 1 else '') + ')'
+    else:
+        original = directory
+        suffix = value.get('scope_id', 'workspace')[:8]
+        index = 0
+        while True:
+            try:
+                await backend.file_operation(sandbox_id, 'transfer_mkdir', path=directory)
+                break
+            except FileExistsError:
+                index += 1
+                directory = original + ' (' + suffix + (f'-{index}' if index > 1 else '') + ')'
     # Allocation and native mkdir occur under the existing node mutation gate.
     # A collided pre-existing folder is never adopted or made writable.
     for entry in [*records['sessions'].values(), *records['groups'].values()]:
-        if entry.get('key') == value['key'] and not entry.get('claimed'):
+        if entry.get('key') == value.get('key') and not entry.get('claimed', True):
             entry.update(directory=directory, claimed=True)
     services.state.set(scope, 'workspace_bindings', records)
     value = {**value, 'directory': directory, 'claimed': True,
@@ -243,8 +264,11 @@ async def claim_directory(services, sandbox_id, value):
     for run in services.run_manager.list_runs():
         bindings = run.lifecycle.get('sandbox_workspaces', {})
         saved = bindings.get(sandbox_id)
-        if saved and saved.get('key') == value['key'] and not saved.get('claimed', True):
-            services.run_manager.store.update_lifecycle(run.run_id, sandbox_workspaces={**bindings, sandbox_id: {**saved, **value}})
+        if saved and saved.get('key') == value.get('key') and not saved.get('claimed', True):
+            updated = {**saved, 'directory': directory, 'claimed': True, 'label': value.get('label', saved.get('label'))}
+            if updated.get('writable_directory'):
+                updated['writable_directory'] = directory
+            services.run_manager.store.update_lifecycle(run.run_id, sandbox_workspaces={**bindings, sandbox_id: updated})
     return value
 
 

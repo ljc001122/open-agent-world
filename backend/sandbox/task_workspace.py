@@ -121,7 +121,7 @@ def list_workspaces(services, sandbox_id):
     groups = {}
     for run in services._require_run_manager().list_runs():
         value = run.lifecycle.get("sandbox_workspaces", {}).get(sandbox_id)
-        if not value or not value.get("directory"):
+        if not value or not value.get("directory") or not value.get('claimed', True):
             continue
         key = value["directory"]
         if key not in groups:

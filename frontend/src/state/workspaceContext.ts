@@ -5,6 +5,7 @@ import { useViewingSession } from './cardState';
 
 export interface WorkspaceContext {
   bound?: boolean;
+  claimed?: boolean;
   scope_type: 'shared' | 'session' | 'group'; scope_id: string; key: string; directory: string; label: string;
   writable_directory?: string | null;
   session_id: string; group_id: string; conversation_id: string | null; sandbox_id: string | null;
@@ -30,15 +31,20 @@ export function useWorkspaceContext(cardId: string, enabled = true): { value?: W
       state.edges.map(edge => [edge.id, edge.source, edge.target, edge.relationship, edge.direction, edge.missing_plugin]),
     ]);
   });
-  const requestKey = JSON.stringify([cardId, session, signature, enabled, attempt]);
-  const [result, setResult] = useState<{ requestKey: string; value?: WorkspaceContext; error?: string }>();
+  const identityKey = JSON.stringify([cardId, session, signature, enabled]);
+  const [result, setResult] = useState<{ identityKey: string; value?: WorkspaceContext; error?: string }>();
+  const refreshEvent = useWorldStore(state => !enabled ? undefined : state.events.find(event =>
+    (event.type === 'conversation_session_updated' && (!session || event.session_id === session))
+    || ((event.sandbox_id === (result?.value?.sandbox_id ?? cardId) || event.node_id === cardId)
+      && ['sandbox_command_started', 'sandbox_command_finished'].includes(event.type)))?.id);
+  const requestKey = JSON.stringify([identityKey, attempt, refreshEvent]);
   useEffect(() => {
     if (!enabled) return;
     let live = true;
     void worldApi.workspaceContext(cardId, session).then(value => {
-      if (live) setResult({ requestKey, value });
-    }).catch(error => { if (live) setResult({ requestKey, error: apiErrorMessage(error) }); });
+      if (live) setResult({ identityKey, value });
+    }).catch(error => { if (live) setResult({ identityKey, error: apiErrorMessage(error) }); });
     return () => { live = false; };
   }, [requestKey]);
-  return enabled && result?.requestKey === requestKey ? { ...result, reload } : { reload };
+  return enabled && result?.identityKey === identityKey ? { ...result, reload } : { reload };
 }

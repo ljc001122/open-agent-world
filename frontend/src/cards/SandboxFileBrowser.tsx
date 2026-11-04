@@ -75,7 +75,10 @@ export function SandboxFileBrowser({ cardId, roots, tree, expanded, loading, sel
         return { name: entry.path, size: entry.file?.size ?? 0, direction: 'upload',
           run: async options => {
             const retry = attempt++ > 0;
-            await worldApi.uploadSandboxEntry(cardId, folder ? `${folder}/${entry.path}` : entry.path, entry.file, options);
+            const receipt = await worldApi.uploadSandboxEntry(cardId, folder ? `${folder}/${entry.path}` : entry.path, entry.file, options);
+            // The first write can claim a suffixed directory after a name
+            // collision. The native queue is serial; later entries follow it.
+            if (receipt.path?.endsWith(entry.path)) folder = receipt.path.slice(0, -entry.path.length).replace(/\/$/, '');
             if (retry && live.current) await onRefresh();
           },
         };
@@ -196,6 +199,7 @@ export function SandboxFileBrowser({ cardId, roots, tree, expanded, loading, sel
     </>}</ul>;
   }
   return <aside ref={sidebarRef} className="sandbox-files file-drop-target nodrag nopan nowheel" aria-label={t('Sandbox files')}
+    data-drop-root="workspace" data-drop-path={workspaceDirectory}
     aria-busy={mutating} data-drop-active={drag.folder !== undefined || undefined} {...drag.props}>
     <div className="sandbox-file-toolbar" role="group" aria-label={t('File actions')}>
         <IconButton ref={searchToggle} icon={Search} size="xs" quiet label={t('Search workspace files')}

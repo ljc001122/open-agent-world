@@ -47,7 +47,11 @@ session rather than supplied by a plugin.
 Folder names come from session/group titles, never the prompt. Unsafe characters
 are normalized; duplicate names and collisions with existing files gain a short
 identity suffix. An existing unowned folder is never adopted or overwritten.
-Renaming a session/group does not move its assigned physical folder. Standalone
+Creating/selecting a session or opening a workspace view does not create a
+folder. Before its first execution or write, the proposed folder name follows
+the current session/group title. The first use claims the physical directory;
+later renaming updates the displayed label without moving that directory.
+Standalone
 execution uses the implicit default session. A configured read-only external
 workspace remains an input root with no writable partition.
 
@@ -67,7 +71,9 @@ Conversation controls. A result viewer with multiple Sandbox sources requires
 one explicit file-preview source, even when their organization modes match.
 
 Changes apply only to new sessions. Existing sessions in related Conversations
-keep their historical directory and document scope, including unused sessions.
+keep their recorded organization and document scope, including unused sessions.
+Already allocated directories stay fixed; an unused folder proposal can still
+follow a renamed title before first use.
 Related means the current native graph or prior Run/command evidence for this
 Sandbox. Unrelated Conversations are not preassigned; connecting one later uses
 the then-current organization policy. The

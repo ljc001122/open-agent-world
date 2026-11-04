@@ -1056,7 +1056,7 @@ export const worldApi = {
     return response.blob();
   },
 
-  uploadSandboxEntry(nodeId: string, path: string, file?: File, options?: import('../files/transferQueue').TransferOptions): Promise<{ written?: number; created?: boolean }> {
+  uploadSandboxEntry(nodeId: string, path: string, file?: File, options?: import('../files/transferQueue').TransferOptions): Promise<{ written?: number; created?: boolean; path?: string }> {
     const route = `/sandboxes/${encodeURIComponent(nodeId)}/files?${new URLSearchParams({ path, directory: String(!file), state_session: viewingSession(nodeId) ?? 'default' })}`;
     if (options) return transferRequest(route, file ?? new Blob(), options);
     return request(route, {

@@ -203,11 +203,77 @@ def test_named_directories_handle_duplicates_collisions_and_session_renames(runt
     assert len({value['directory'].casefold() for value in values}) == 5
     assert all('/' not in value['directory'] and ':' not in value['directory'] for value in values)
     assert all(len(value['directory'].encode('utf-8')) <= 255 and not value['directory'].endswith(('.', ' ')) for value in values)
+    assert not any(value['claimed'] for value in values)
+    for session, value in zip((a, b, bad, unicode_title, truncated), values):
+        response = client.post(f"/api/sandboxes/{sandbox['id']}/files", headers={'X-OAW-State-Session': session.id},
+            params={'path': value['directory'] + '/result.txt'}, content=b'owned')
+        assert response.status_code == 201, response.text
+        assert (root / response.json()['path']).read_bytes() == b'owned'
+    values = [client.get(url, headers={'X-OAW-State-Session': row.id}).json() for row in (a, b, bad, unicode_title, truncated)]
     assert all((root / value['directory']).is_dir() for value in values)
     assert values[0]['directory'].startswith('Repeated (')
     assert (root / 'Repeated/keep.txt').read_text() == 'pre-existing'
     store.rename_session(room['id'], a.id, 'Renamed')
     assert client.get(url, headers={'X-OAW-State-Session': a.id}).json()['directory'] == values[0]['directory']
+
+
+@pytest.mark.parametrize('mode', ['session', 'group'])
+def test_unused_workspace_follows_current_name_and_only_first_write_claims_it(runtime_client, mode):
+    from backend.capabilities.provider import WorldAgentCapabilityProvider
+
+    client, backend, _ = runtime_client
+    agent, sandbox, *_ = setup_skill(client)
+    services = client.app.state.services
+    assert client.patch(f"/api/nodes/{sandbox['id']}", json={'config': {'workspace_scope': mode}}).status_code == 200
+    room = create_node(client, 'conversation')
+    client.post('/api/edges', json={'source': agent['id'], 'target': room['id'], 'relationship': 'participate'})
+    store = services.conversations
+    session = store.create_session(room['id'], ConversationSessionCreate(title='New session', group_title='New group'))
+    peer = store.create_session(room['id'], ConversationSessionCreate(title='Peer', group_id=session.group_id)) if mode == 'group' else session
+    root = backend._sandboxes_root / sandbox['id'] / 'workspace'
+    original_files = list(root.iterdir())
+    url = f"/api/nodes/{sandbox['id']}/workspace-context"
+    context = lambda current: client.get(url, headers={'X-OAW-State-Session': current.id}).json()
+    first = context(session)
+    context(peer)
+    run, peer_run = [new_run(services, agent, session=current, task_id=task) for current, task in ((session, 'first-task'), (peer, 'peer-task'))]
+    for saved_run in (run, peer_run):
+        with in_run(saved_run):
+            assert not binding(services, sandbox['id'], agent['id'])['claimed']
+    assert list(root.iterdir()) == original_files
+    title = 'Named workspace'
+    if mode == 'group':
+        store.rename_group(room['id'], session.group_id, title)
+    else:
+        store.rename_session(room['id'], session.id, title)
+    renamed = context(session)
+    assert renamed['directory'] == title and renamed['key'] == first['key'] and not renamed['claimed']
+    assert context(peer)['directory'] == title
+    assert list(root.iterdir()) == original_files
+    # A foreign directory with the same title must never be adopted by a writer.
+    (root / title).mkdir()
+    (root / title / 'keep.txt').write_text('foreign')
+
+    async def write():
+        with in_run(run):
+            await WorldAgentCapabilityProvider(services).invoke_tool(agent['id'], 'operation:write_sandbox_text_file',
+                {'sandbox': sandbox['id'], 'path': 'result.txt', 'content': 'owned'})
+    client.portal.call(write)
+    owned = context(session)
+    assert owned['claimed'] and owned['directory'].startswith(title + ' (')
+    assert (root / owned['directory'] / 'result.txt').read_text() == 'owned'
+    assert list((root / title).iterdir()) == [root / title / 'keep.txt']
+    for saved_run in (run, peer_run):
+        current = services.run_manager.get_run(saved_run.run_id).lifecycle['sandbox_workspaces'][sandbox['id']]
+        assert current['directory'] == owned['directory'] and current['claimed']
+        assert current['task_id'] == saved_run.task_id and current['origin_run_id'] == saved_run.run_id
+    if mode == 'group':
+        store.rename_group(room['id'], session.group_id, 'Later name')
+    else:
+        store.rename_session(room['id'], session.id, 'Later name')
+    assert context(session)['directory'] == owned['directory']
+    assert context(session)['label'] == 'Later name'
+    assert not (root / first['directory']).exists() and not (root / 'Later name').exists()
 
 
 def test_default_session_group_switch_and_frozen_run_binding(runtime_client):
@@ -260,7 +326,8 @@ def test_new_session_ui_listing_is_empty_and_manual_terminal_creates_the_same_di
     response = client.get(f"/api/sandboxes/{sandbox['id']}/files", headers=headers,
         params={'operation': 'list', 'path': path})
     assert response.status_code == 200 and response.json()['entries'] == []
-    assert (root / path).is_dir()  # Native allocation creates only this directory.
+    assert response.json()['exists'] is False
+    assert not (root / path).exists()  # Merely opening the view does not allocate it.
     response = client.post(f"/api/sandboxes/{sandbox['id']}/execute", headers=headers,
         json={'argv': ['cmd.exe', '/c', 'echo scoped'], 'working_directory': path})
     assert response.status_code == 200, response.text
@@ -284,6 +351,12 @@ def test_workspace_catalog_includes_manual_work_and_allows_browsing_other_saved_
         saved = binding(services, sandbox['id'], agent['id'])
     root = backend._sandboxes_root / sandbox['id'] / 'workspace'
     client.get(f"/api/nodes/{sandbox['id']}/workspace-context", headers={'X-OAW-State-Session': b.id})
+    assert not (root / path_b).exists()
+    from backend.sandbox.task_workspace import ensure_directory
+    async def use_workspace():
+        with in_run(run):
+            await ensure_directory(services, sandbox['id'], agent['id'])
+    client.portal.call(use_workspace)
     assert (root / path_b).is_dir()
     url = f"/api/sandboxes/{sandbox['id']}"
     items = client.get(url + '/workspaces', headers=headers_a).json()['items']
