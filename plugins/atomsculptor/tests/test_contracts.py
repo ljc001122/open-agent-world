@@ -1166,7 +1166,7 @@ class RuntimeContractTests(unittest.TestCase):
         from oaw_atomsculptor.skill_package import atomsculptor_skills
 
         package = atomsculptor_skills()
-        self.assertEqual(package.version, "0.1.14")
+        self.assertEqual(package.version, "0.1.15")
         self.assertEqual(len(package.skills), 18)
         self.assertTrue(all("-" not in skill.id and "-" not in skill.name for skill in package.skills))
         from backend.packs.spec import read_source_pack

@@ -29,7 +29,10 @@ def signature_parser(command):
                 if isinstance(n, ast.FunctionDef) and n.name == command)
     node.body = [ast.Pass()]
     tree = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
-    namespace = {}; exec(compile(tree, '<trusted signature only>', 'exec'), namespace)
+    validation_spec = importlib.util.spec_from_file_location('contract_validation', SCRIPTS / 'structure_validation.py')
+    validation = importlib.util.module_from_spec(validation_spec); validation_spec.loader.exec_module(validation)
+    namespace = {'DistanceMode': validation.DistanceMode}
+    exec(compile(tree, '<trusted signature only>', 'exec'), namespace)
     return module.build_cli_parser(prog='contract', description_lines=[], tool_functions={command: namespace[command]})
 
 
@@ -50,11 +53,59 @@ def test_actual_signature_parser_accepts_folder_and_explicit_boolean_values(bool
     ({'expected_count': '80'}, 'expected_count'), ({'min_vacuum': float('nan')}, 'min_vacuum'),
     ({'min_vacuum': 10 ** 500}, 'min_vacuum'), ({'nonperiodic': 'maybe'}, 'nonperiodic'),
     ({'folder': []}, 'folder'), ({'folder': 'other'}, 'folder'), ({'file_name': 'other.xyz'}, 'file_name'),
-    ({'unknown': 2}, 'unknown')])
+    ({'unknown': 2}, 'unknown'), ({'distance_mode': 'minimum_image'}, 'distance_mode')])
 def test_delivery_rejects_invalid_or_conflicting_arguments_before_any_dispatch(values, field):
     with pytest.raises(DeliveryArguments) as e:
         _validate_argv('candidate.extxyz', values)
     assert field in {issue['field'] for issue in e.value.issues}
+
+
+def test_validation_enum_is_shared_by_host_schema_native_cli_and_validator():
+    from typing import get_args
+    from oaw_atomsculptor.delivery import validation_schema
+    from test_geometry_validation import validation
+    choices = get_args(validation.DistanceMode)
+    assert tuple(validation_schema()['properties']['distance_mode']['enum']) == choices
+    parser = signature_parser('validate_structure')
+    for value in choices:
+        argv = _validate_argv('candidate.extxyz', {'distance_mode': value})
+        assert parser.parse_args(argv).distance_mode == value
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(['validate_structure', '--folder', '.', '--file-name', 'candidate.extxyz',
+                           '--distance-mode', 'minimum_image'])
+    assert caught.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_invalid_validation_enum_never_dispatches_and_native_input_failure_is_not_scientific_failure():
+    from oaw_atomsculptor.delivery import validation_step_function
+    from test_candidate_first_workflow import start_direct, candidate_report
+    from test_measurement_handoffs import execute as measured_execute, record
+    e = await start_direct('document')
+    await measured_execute(e, 'build.py', record(**candidate_report(e)))
+    definitions = [ScopedToolDefinition('operation:run_skill_script', 'run_skill_script', 'Native Skill')]
+    e.configure_tools(definitions)
+    calls = []
+    async def invoke(capability, args):
+        import json
+        calls.append(args)
+        return {'command_id': 'validator', 'exit_code': 1, 'stdout': json.dumps({
+            'file': 'cnt.extxyz', 'passed': False, 'validation_status': 'unsupported',
+            'error': 'Periodic distances require a finite nonsingular cell'})}
+    validate = validation_step_function(e, definitions, invoke, asyncio.Event())
+    result = await validate(sandbox='box', skill='inspector', structure_path='cnt.extxyz',
+                            checks={'distance_mode': 'minimum_image'})
+    assert result['error']['code'] == 'validation_arguments' and not calls
+    assert result['error']['issues'][0]['allowed_values'] == ['auto', 'finite', 'periodic']
+    result = await validate(sandbox='box', skill='inspector', structure_path='cnt.extxyz', checks={'distance_mode': 'periodic'})
+    assert result['error']['code'] == 'validation_unavailable' and result['error']['command_dispatched']
+    assert result['error']['kind'] == 'native_dependency'
+    assert len(calls) == 1 and not e.outputs and 'checkpoint_action' not in result
+    await e.tool_callbacks('structure_builder')['after_tool_callback'](SimpleNamespace(name='validate_modelling_artifact'),
+        {'sandbox': 'box', 'structure_path': 'cnt.extxyz'}, SimpleNamespace(function_call_id='validation-result'), result)
+    assert e.correction_feedback['kind'] == 'native_dependency'
+    prepare(e, request({'advance_modelling_stage', 'finish_task'}))
+    assert 'rejected before command dispatch' not in e.actions.last_action
 
 
 @pytest.mark.asyncio
@@ -295,6 +346,7 @@ async def test_real_adk_delivery_declaration_carries_typed_acceptance_parameters
     assert declaration.parameters is None
     assert schema['properties']['validate']['additionalProperties'] is False
     assert schema['properties']['validate']['properties']['nonperiodic']['type'] == 'boolean'
+    assert schema['properties']['validate']['properties']['distance_mode']['enum'] == ['auto', 'finite', 'periodic']
     assert '--folder' not in schema['properties']['validate']['properties']
 
 

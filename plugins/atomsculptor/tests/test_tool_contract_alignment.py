@@ -15,7 +15,6 @@ from oaw_atomsculptor import AtomSculptorPlugin
 from oaw_atomsculptor.execution_steps import step_tool_schema
 from oaw_atomsculptor.runtime import _role_definitions
 from oaw_atomsculptor.skill_package import atomsculptor_skills
-from plugins.task_board.oaw_task_board import TaskBoardPlugin
 from skill_materialization import skill_scripts
 from test_typed_execution import COMMON, native_sdk_fixture
 from test_execution_steps import prior
@@ -128,7 +127,6 @@ async def test_invalid_assessment_identifies_the_leaf_before_another_execution(e
 
 def test_actual_task_board_registration_is_assigned_to_planner_even_with_visible_aliases():
     registry = create_builtin_registry()
-    registry.install(TaskBoardPlugin())
     operations = [d for d in registry._capabilities.values() if d.kind.startswith("oaw.tasks.")]
     definitions = [ScopedToolDefinition("operation:" + d.tool_name, "visible_" + d.tool_name, d.description,
                                         input_schema=d.input_schema) for d in operations]

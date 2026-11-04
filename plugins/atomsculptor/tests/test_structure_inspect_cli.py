@@ -20,6 +20,15 @@ def cli(tmp_path, *args):
     return result.returncode, json.loads(result.stdout)
 
 
+def test_invalid_distance_mode_is_rejected_before_reading_a_structure(tmp_path):
+    result = subprocess.run([sys.executable, str(SCRIPTS / 'structure_inspect.py'), 'validate_structure',
+        '--folder', '.', '--file-name', 'not-present.extxyz', '--distance-mode', 'minimum_image'],
+        cwd=tmp_path, text=True, capture_output=True, timeout=30)
+    assert result.returncode == 2 and not result.stdout
+    assert 'invalid choice' in result.stderr and 'periodic' in result.stderr
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("n,m,finite", [(5, 5, True), (7, 7, True), (10, 0, True),
                                        (4, 2, True), (5, 5, False)])
 def test_bundled_cnt_builder_and_inspector_agree_on_boundary_modes(tmp_path, n, m, finite):

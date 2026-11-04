@@ -74,7 +74,7 @@ def atomsculptor_skills() -> SkillPackage:
     root = files(__package__).joinpath("skills")
     return SkillPackage(
         package_id="atomsculptor.skills",
-        version="0.1.14",
+        version="0.1.15",
         name="AtomSculptor Skills",
         description="Portable atomistic modelling, inspection, conversion, and Materials Project skills.",
         author="AtomSculptor",

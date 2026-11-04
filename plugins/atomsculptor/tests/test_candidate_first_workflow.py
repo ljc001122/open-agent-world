@@ -73,7 +73,8 @@ async def test_construction_first_still_requires_candidate_validation_and_read_b
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('check_passed', [True, False])
-async def test_native_validation_offers_current_checkpoint_only_when_existing_gates_pass(check_passed):
+@pytest.mark.parametrize('outcome', ['continue', 'ready'])
+async def test_native_validation_offers_current_checkpoint_only_when_existing_gates_pass(check_passed, outcome):
     import asyncio
     import json
     from backend.agents.models import ScopedToolDefinition
@@ -85,8 +86,14 @@ async def test_native_validation_offers_current_checkpoint_only_when_existing_ga
     e.actions.sandbox_states['box'] = 'ready'
     measured = candidate_report(e)
     measured['constraints'][0]['passed'] = check_passed
+    measured['artifacts'].append({**deepcopy(measured['artifacts'][0]), 'path': 'labels.npz',
+                                  'layout': {'format': 'npz', 'primary_dataset': 'labels'}})
     await execute(e, 'build.py', record(**measured))
-    assert assess(e)['ok']
+    observed = e.workflow.advance(e, 'observe', hypothesis='Candidate check', measurement='Native report',
+        outcome=outcome, next_step='Validate the saved structure', structure_path='cnt.extxyz')
+    assert observed['ok']
+    if outcome == 'ready' and check_passed:
+        assert 'Independently validate' in observed['next_action'] and 'structure_path_required' not in observed['next_action']
     before = deepcopy(e.experiment_history)
     req = request({'advance_modelling_stage', 'finish_task'})
     prepare(e, req)
@@ -103,11 +110,35 @@ async def test_native_validation_offers_current_checkpoint_only_when_existing_ga
     if check_passed:
         args = result['checkpoint_action']['arguments']
         assert args['stage'] == 'build' and 'completes build' in result['next_action']
+        assert args['structure_path'] == 'cnt.extxyz' and 'structure_path_required' not in result['next_action']
         assert e.workflow.advance(e, **args)['ok']
         assert e.workflow.current == 'deliver'
     else:
         assert 'checkpoint_action' not in result and e.workflow.current == 'build'
         assert e.workflow.advance(e, 'build', 'box', 'build.py', structure_path='cnt.extxyz')['error']['code'] == 'candidate_constraints'
+
+
+@pytest.mark.asyncio
+async def test_ready_candidate_selection_survives_other_validated_artifacts():
+    import json
+    e = await start_direct('document')
+    report = candidate_report(e)
+    report['artifacts'].append({**deepcopy(report['artifacts'][0]), 'path': 'alternative.extxyz'})
+    await execute(e, 'build.py', record(**report))
+    assert e.workflow.advance(e, 'observe', hypothesis='Candidates measured', measurement='Native report',
+        outcome='ready', next_step='Validate chosen candidate', structure_path='cnt.extxyz')['ok']
+    await tool(e, 'run_skill_script', {'sandbox': 'box', 'skill': 'inspector', 'script': 'scripts/structure_inspect.py',
+        'argv': ['validate_structure', '--folder', '.', '--file-name', 'alternative.extxyz']},
+        {'exit_code': 0, 'stdout': json.dumps({'file': 'alternative.extxyz', 'passed': True})})
+    advice, _ = e.actions.next_action(e)
+    assert 'validate_modelling_artifact' in advice and '"cnt.extxyz"' in advice
+    assert '"alternative.extxyz"' not in advice
+    await validate(e)
+    assert e.workflow.checkpoint_arguments(e) is None  # Two validations need an explicit candidate.
+    before = deepcopy(e.workflow.snapshot())
+    advice, _ = e.actions.next_action(e)
+    assert 'Call advance_modelling_stage' in advice and '"structure_path": "cnt.extxyz"' in advice
+    assert '"alternative.extxyz"' not in advice and e.workflow.snapshot() == before
 
 
 @pytest.mark.asyncio

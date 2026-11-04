@@ -77,7 +77,7 @@ class ExecutionActions:
                     {"finish_task"} | ({"install_python_packages", "inspect_sandbox", "start_sandbox", "read_tool_result"} & names))
         return None
 
-    def next_action(self, evidence):
+    def next_action(self, evidence, *, structure_path=""):
         workflow = evidence.workflow
         names = workflow.tool_names or frozenset()
         exits = {"finish_task", "advance_modelling_stage"}
@@ -185,6 +185,15 @@ class ExecutionActions:
                     "Choose ready to advance the input checkpoint, continue with a justified input experiment, "
                     "or request review with the actual evidence. Existing artifacts and receipts remain available.", None)
         ready = workflow.ready_execution(evidence)
+        if ready is not None and not structure_path:
+            structure_path = evidence.experiment_observations[ready.execution_sequence].get("structure_path", "")
+        complete = workflow.checkpoint_arguments(evidence, structure_path)
+        if complete:
+            return ("The current build checkpoint has execution, assessment and independent validation receipts. "
+                    "Call advance_modelling_stage with arguments " + json.dumps(complete, ensure_ascii=False) +
+                    ". This completes build, then opens delivery tools; stage is the current checkpoint, not the destination. "
+                    "Reuse the recorded assessment and validation. No additional script or validation is needed "
+                    "for these receipts; further scientific work needs a justified remaining question.", None)
         if ready is not None:
             measured = evidence.measurement_reports.get(ready.execution_sequence, {})
             paths = workflow.execution_artifact_paths(evidence, ready)
@@ -192,7 +201,8 @@ class ExecutionActions:
                 paths = [path for (box, path), output in evidence.outputs.items()
                          if box == ready.sandbox and output.get("phase") == "validated"
                          and output.get("execution_sequence", -1) >= ready.execution_sequence]
-            structure_path = paths[0] if len(paths) == 1 else ""
+            observation = evidence.experiment_observations[ready.execution_sequence]
+            structure_path = structure_path or observation.get("structure_path", "") or (paths[0] if len(paths) == 1 else "")
             checked = workflow.experiment_checkpoint(evidence, workflow.current, ready.sandbox, ready.path, structure_path)
             arguments = {"stage": workflow.current, "sandbox": ready.sandbox, "script_path": ready.path}
             if structure_path:
@@ -209,13 +219,6 @@ class ExecutionActions:
             return ("The current assessment is already ready, but its checkpoint needs this correction: " +
                     json.dumps(issue, ensure_ascii=False) + ". Correct only the indicated evidence or argument, then use " +
                     advance + ". Keep the recorded assessment; subtask_complete requires outcome=continue.", None)
-        complete = workflow.checkpoint_arguments(evidence)
-        if complete:
-            return ("The current build checkpoint has execution, assessment and independent validation receipts. "
-                    "Complete it with advance_modelling_stage using " + json.dumps(complete, ensure_ascii=False) +
-                    ". This completes build, then opens delivery tools; stage is the current checkpoint, not the destination. "
-                    "Reuse the recorded assessment and validation. No additional script or validation is needed "
-                    "for these receipts; further scientific work needs a justified remaining question.", None)
         if workflow.current in {"probe", "build"}:
             if not self.sandbox_states and "inspect_sandbox" in names:
                 return "Inspect the authorized Sandbox state before the current action.", exits | {"inspect_sandbox", "inspect_atom_structure"}
@@ -491,6 +494,8 @@ class ExecutionActions:
                     if not evidence.scripts:
                         tool.function_declarations = [d for d in tool.function_declarations
                             if d.name not in STEP_TOOL_MODES or STEP_TOOL_MODES[d.name] == "new"]
+                    if not evidence.script_sources:
+                        tool.function_declarations = [d for d in tool.function_declarations if d.name != "read_modelling_source"]
                     if evidence.steps.argument_issue:
                         from .execution_steps import STEP_TOOL_MODES
                         tool.function_declarations = [d for d in tool.function_declarations
@@ -623,11 +628,11 @@ async def collect_script_operation(evidence, definitions, invoke, semantic_name,
         remaining = evidence.remaining_seconds
         if remaining is not None and remaining <= .01:
             evidence.stop("run time budget reached while collecting a Sandbox command")
-        evidence.notice("structure_builder", "Waiting for Sandbox operation; no additional model request",
-            workflow_event="modelling_command_wait", operation_id=operation, sandbox=sandbox)
         return 30 if remaining is None else min(30, remaining)
     try:
         return await collect_operation_result(result, lambda op, seconds: invoke(waiter.capability_id,
-            {"sandbox": sandbox, "operation_id": op, "wait_seconds": seconds}), stopped, before_wait=before_wait)
+            {"sandbox": sandbox, "operation_id": op, "wait_seconds": seconds}), stopped, before_wait=before_wait,
+            on_progress=lambda payload: evidence.sandbox_wait_progress(payload, sandbox=sandbox,
+                workflow_event="modelling_command_wait"))
     except OperationReceiptMismatch as exc:
         return exc.pending

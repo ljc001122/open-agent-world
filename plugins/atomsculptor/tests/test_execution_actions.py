@@ -557,12 +557,16 @@ async def test_host_collects_inline_and_environment_preparation_without_new_mode
     hooks = e.tool_callbacks("structure_builder")
     obj, ctx = SimpleNamespace(name=name), SimpleNamespace(function_call_id="initial")
     assert await hooks["before_tool_callback"](obj, args, ctx) is None
-    initial = {"status": "running", "operation_id": "op", "command_started": False, "phase": "preparing_python"}
+    initial = {"status": "running", "operation_id": "op", "command_started": False, "phase": "preparing_python",
+        "shared_python": {"phase": "package_install", "last_install_state": "running",
+            "seconds_without_progress": 120, "output_tail": "Resolved packages\nDownloading sample (1MiB)\n"}}
     calls = []
     async def invoke(cap, values):
         calls.append((cap, values))
-        if len(calls) < 3:
+        if len(calls) == 1:
             return initial
+        if len(calls) == 2:
+            return {'status': 'running', 'operation_id': 'op', 'phase': 'executing', 'command_started': True}
         return {"exit_code": 0, "command_id": "op", "stdout": "2.5.4"}
     result = await collect_script_operation(e, definitions, invoke, name, args, initial, asyncio.Event())
     await hooks["after_tool_callback"](obj, args, ctx, result)
@@ -572,6 +576,20 @@ async def test_host_collects_inline_and_environment_preparation_without_new_mode
     if name == "execute_command":
         assert e.actions.inline_measurements[-1]["command_id"] == "op"
     assert not e.scripts and not e.measurement_reports
+    notices = []
+    while not e.trace.queue.empty():
+        _, entry = e.trace.queue.get_nowait()
+        if entry.get('workflow_event') == 'modelling_command_wait':
+            notices.append(entry)
+    assert len(notices) == 3
+    assert all('Preparing shared Python' in entry['text'] and 'Latest installer log: Downloading sample' in entry['text'] for entry in notices[:2])
+    assert all('last observed installer/cache activity 120s ago' in entry['text'] for entry in notices[:2])
+    assert all('no installer progress' not in entry['text'] for entry in notices)
+    assert notices[0]['operation_progress']['command_started'] is False
+    assert notices[0]['operation_progress']['installer']['seconds_without_progress'] == 120
+    assert notices[-1]['text'] == 'Sandbox command is running'
+    assert notices[-1]['operation_progress']['command_started'] is True
+    assert 'installer' not in notices[-1]['operation_progress']
 
 
 @pytest.mark.asyncio

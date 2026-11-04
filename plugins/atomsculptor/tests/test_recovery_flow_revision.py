@@ -34,9 +34,10 @@ async def test_restored_action_checks_readiness_then_retains_native_execution_ro
     configure(e)
     if state is not None:
         e.actions.sandbox_states["box"] = state
-    req = request(NAMES)
+    req = request(NAMES | {"read_modelling_source"})
     prepare(e, req)
     actual = declarations(req)
+    assert "read_modelling_source" not in actual
     assert expected <= actual
     if state != "ready":
         assert "run_modelling_step" not in actual and "execute_command" not in actual

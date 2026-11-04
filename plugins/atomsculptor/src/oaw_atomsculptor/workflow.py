@@ -1606,6 +1606,8 @@ class ModellingWorkflow:
             if reported_objective is not None:
                 row["reported_objective"] = dict(reported_objective)
                 row["objective_status"] = "native_stdout" if measured == reported_objective else "unavailable_or_mismatch"
+            if structure_path:
+                row["structure_path"] = structure_path
             if self.host_signal and self.host_signal["execution_sequence"] == item.execution_sequence:
                 row["host_advisory"] = deepcopy(self.host_signal)
             if next_experiment is not None and outcome == "continue":

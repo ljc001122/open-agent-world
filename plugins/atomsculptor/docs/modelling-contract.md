@@ -234,6 +234,10 @@ it does not mean "enter build". SDK options are narrowed to current operations.
 After independent validation, a `checkpoint_action` can identify the exact
 completion call when existing execution/assessment/requirement gates pass. It
 does not mutate the assessment, advance automatically, or satisfy failed checks.
+The explicit structure path in an assessment and a unique current validation
+binding identify the candidate even when the execution also emits labels or
+reports. `next_action` and `checkpoint_action` reuse the same completion gate;
+multiple independently validated candidates still require an explicit choice.
 Completing build opens delivery tools. Staged helper guidance is only supplied
 when those tools are registered; direct Builder keeps its native tool flow.
 Its result includes the native import/read-back summary, bounded structure
@@ -245,8 +249,14 @@ function signatures, the same metadata used by its CLI parser. Both validation
 and conversion receive `--folder .` and the workspace-relative `--file-name`;
 booleans receive explicit `true`/`false` values. Unknown keys, incorrect types and
 conflicting input paths are rejected before dispatch with precise field errors.
+Finite choices use the validator's shared `Literal` type: `distance_mode` is
+`auto`, `finite` or `periodic` in the host schema, pre-dispatch checks and Skill
+CLI. The host reads trusted type declarations without importing scientific
+dependencies. Unknown values are invocation errors, not failed geometry checks.
 CLI parse failures (`exit_code=2`) are interface blockers, distinct from scientific
 validation failures, and route to an accurate unfinished report.
+An input/dependency/unsupported error without a scientific verdict is reported
+separately from measured violations; inspect the cause before changing the method.
 
 Document delivery requires `target` in its stage-specific SDK schema. For stored
 calls omitting it, the host fills only a unique native import identity and still
@@ -380,6 +390,21 @@ with native Run `execution_checkpoint` state (saved scripts, actual receipts,
 validation/import state and unknown executions). This provides continuation
 evidence; it does not automatically replay commands or restore an entire SDK
 session. The exporter includes `execution checkpoint.json` when this state exists.
+For unfinished probe/build work, continuation rechecks the existing command receipt
+and reads the current saved source through authorized native tools. This includes
+exit-zero commands whose diagnostic or candidate work was interrupted afterward.
+The source becomes editable; historical measurements, acceptance and validations
+are not promoted. An unchanged confirmed nonzero exit can retain its failed-command
+identity for repair. Changed or legacy source remains editable without attributing
+an old result to its current bytes. A further interruption retains the saved work.
+Unknown effects, missing files, mismatched receipts and revoked access prevent
+restoration; no command is replayed automatically. `read_modelling_source` is
+projected only when a current native-confirmed source cache exists.
+
+Common Builder guidance covers supplied-structure inspection and exact file
+staging in direct and staged modes. Self-constructed inputs are identified as
+such; preservation claims refer to that stated reference. Missing test inputs do
+not add a mandatory probe or a material-specific construction rule.
 
 During probe/build, actions are narrowed to the current readiness, experiment,
 assessment or waiting phase. Builder retains relevant authorized inspection,

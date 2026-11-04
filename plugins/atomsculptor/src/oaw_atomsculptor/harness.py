@@ -197,6 +197,32 @@ class RunEvidence:
             **details,
         }))
 
+    def sandbox_wait_progress(self, payload, *, sandbox, workflow_event):
+        """Forward native preparation/execution facts without another model turn."""
+        from open_agent_world.tool_activity import public_tool_payload
+        python = payload.get("shared_python")
+        python = python if isinstance(python, dict) else {}
+        preparing = payload.get("phase") == "preparing_python" or payload.get("waiting_for_shared_python") is True
+        details = {k: payload[k] for k in ("phase", "command_started", "started_at") if k in payload}
+        if preparing:
+            text = "Preparing shared Python dependencies; requested command has not started"
+            details["installer"] = {k: python[k] for k in ("phase", "last_install_state", "seconds_without_progress") if k in python}
+            lines = str(python.get("output_tail") or "").strip().splitlines()
+            if lines:
+                details["installer"]["latest_output"] = lines[-1].strip()[-240:]
+                text += ". Latest installer log: " + details["installer"]["latest_output"]
+            if python.get("seconds_without_progress") is not None:
+                # This age comes from log/cache mtimes. A recent update is an
+                # observation of activity, not an installer-stall diagnosis.
+                text += f" (last observed installer/cache activity {python['seconds_without_progress']}s ago)"
+        elif payload.get("phase") == "executing" and payload.get("command_started") is not False:
+            text = "Sandbox command is running"
+        else:
+            text = "Waiting for Sandbox operation"
+        safe = public_tool_payload({"name": "wait_sandbox_operation", "response": details})["response"]
+        self.notice("structure_builder", text, workflow_event=workflow_event,
+                    operation_id=payload.get("operation_id"), sandbox=sandbox, operation_progress=safe)
+
     def stop(self, reason: str) -> None:
         raise HarnessStopped(f"AtomSculptor stopped before completion: {reason}. "
                                 "Inspect Sandbox files and document state before retrying; "
@@ -227,8 +253,9 @@ class RunEvidence:
         current = self.scripts.get(self.current_script_key) or self.latest_experiment()
         repair_source = ({"sandbox": current.sandbox, "script_path": current.path, "command_id": current.command_id,
                           "source": self.script_sources.get((current.sandbox, current.path))}
-                         if current and (current.phase == "written" or
-                             type(current.exit_code) is int and current.exit_code != 0) else None)
+                         if current and self.workflow.current in {"probe", "build"}
+                         and (current.phase == "written" or current.phase == "executed"
+                              and current.execution_sequence > self.workflow.anchor) else None)
         return {"status": "unfinished", "reason": str(reason), "stage": self.workflow.current,
                 "repair_source": repair_source,
                 "plan_revision": self.workflow.plan_revision,
@@ -333,9 +360,11 @@ class RunEvidence:
             candidate = next((row for row in self.continuation["scripts"]
                 if row.get("sandbox") == experiment.get("sandbox") and row.get("path") == experiment.get("script_path")
                 and row.get("command_id") == experiment.get("command_id") and row.get("phase") == "executed"), None)
-            if (candidate and type(experiment.get("exit_code")) is int and experiment["exit_code"] != 0
+            if (candidate and type(experiment.get("exit_code")) is int
                     and isinstance(experiment.get("command_id"), str) and experiment["command_id"]
-                    and candidate["path"] == action.get("artifact")):
+                    and candidate.get("exit_code") == experiment["exit_code"]
+                    and not any(row.get("sandbox") == candidate["sandbox"]
+                        and row.get("command_id") == candidate["command_id"] for row in workflow.checkpoints)):
                 self._continuation_repair = {"script": candidate, "source": deepcopy(checkpoint.get("repair_source"))}
             else:
                 candidate = next((row for row in reversed(self.continuation["scripts"])
@@ -357,7 +386,7 @@ class RunEvidence:
         return True
 
     async def reconcile_continuation(self, definitions, invoke, stopped):
-        """Recover a failed script through current authorized native reads only.
+        """Recover unfinished saved work through authorized native reads only.
 
         Completed scientific checks are never restored. Changed or legacy
         (source-less) checkpoints expose the live file for editing, without
@@ -389,8 +418,8 @@ class RunEvidence:
         if needs_receipt:
             receipt = await native("wait_sandbox_operation", {"sandbox": sandbox, "operation_id": command, "wait_seconds": 1})
             if (receipt.get("command_id") != command or type(receipt.get("exit_code")) is not int
-                    or receipt["exit_code"] == 0 or receipt.get("exit_code") != item.get("exit_code")):
-                history["repair_state"] = "failed command could not be reconfirmed; inspect native receipts, do not replay"
+                    or receipt.get("exit_code") != item.get("exit_code")):
+                history["repair_state"] = "historical command could not be reconfirmed; inspect native receipts, do not replay"
                 return
         chunks, offset, total = [], 0, None
         while True:
@@ -421,8 +450,9 @@ class RunEvidence:
         script = ScriptEvidence(sandbox, path, version=version if same else version + 1, unexecuted_writes=0)
         self.scripts[key], self.script_sources[key], self.current_script_key = script, source, key
         if needs_receipt:
-            self.execution_observations[key] = "Historical failed command:\n" + str(receipt.get("stderr", ""))[:3000]
-        if same and needs_receipt:
+            self.execution_observations[key] = "Historical command (exit=" + str(receipt["exit_code"]) + "):\n" + str(receipt.get("stderr", ""))[:3000]
+        failed_source_confirmed = same and needs_receipt and receipt["exit_code"] != 0
+        if failed_source_confirmed:
             self.execution_sequence += 1
             script.phase, script.exit_code, script.command_id = "executed", receipt["exit_code"], command
             script.execution_sequence = self.execution_sequence
@@ -432,11 +462,12 @@ class RunEvidence:
                 "source_run_id": history["source_run_id"], "stderr": str(receipt.get("stderr", "")),
                 "stdout": str(receipt.get("stdout", ""))}
         history["repair_state"] = ("saved source restored for patch/rerun; no execution result is promoted" if not needs_receipt else
-            "failed execution and current source reconfirmed; patch the reported cause" if same else
-            "live saved source restored for patch/rerun; historical error is context only, current bytes were not confirmed as the failed version")
+            "failed execution and current source reconfirmed; patch the reported cause" if failed_source_confirmed else
+            "saved source and completed command reconfirmed; source is editable, but historical measurements and acceptance are not restored" if same else
+            "live saved source restored for patch/rerun; historical output is context only, current bytes were not confirmed as the executed version")
         history["script_restored"] = True
         self.notice("structure_builder", history["repair_state"], workflow_event="continuation_script_restored",
-                    source_run_id=history["source_run_id"], sandbox=sandbox, script_path=path, failed_source_confirmed=same and needs_receipt)
+                    source_run_id=history["source_run_id"], sandbox=sandbox, script_path=path, failed_source_confirmed=failed_source_confirmed)
 
     def semantic_tool(self, name):
         from .execution_steps import STEP_TOOL_MODES

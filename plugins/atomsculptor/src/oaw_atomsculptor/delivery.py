@@ -47,20 +47,36 @@ def _cli_parameters(command):
     The existing Skill CLI derives its options from these same signatures.
     No model source, external Skill content or function body is executed here.
     """
-    source = files(__package__).joinpath("skills/structure-inspect/scripts/structure_inspect.py").read_text(encoding="utf-8")
+    scripts = files(__package__).joinpath("skills/structure-inspect/scripts")
+    source = scripts.joinpath("structure_inspect.py").read_text(encoding="utf-8")
+    # Share the validator's Literal aliases without importing scientific code.
+    aliases = {node.targets[0].id: node.value for node in ast.parse(
+        scripts.joinpath("structure_validation.py").read_text(encoding="utf-8")).body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Subscript) and ast.unparse(node.value.value) == "Literal"}
     function = next(node for node in ast.parse(source).body
                     if isinstance(node, ast.FunctionDef) and node.name == command)
     count = len(function.args.args) - len(function.args.defaults)
-    return {arg.arg: {"type": ast.unparse(arg.annotation).split(" | ")[0],
-                      "nullable": "None" in ast.unparse(arg.annotation), "required": i < count,
-                      **({"default": ast.literal_eval(function.args.defaults[i - count])} if i >= count else {})}
-            for i, arg in enumerate(function.args.args)}
+    parameters = {}
+    for i, arg in enumerate(function.args.args):
+        annotation = ast.unparse(arg.annotation)
+        literal = aliases.get(annotation, arg.annotation)
+        choices = (ast.literal_eval(literal.slice) if isinstance(literal, ast.Subscript)
+                   and ast.unparse(literal.value) == "Literal" else None)
+        if choices is not None and not isinstance(choices, tuple):
+            choices = (choices,)
+        parameters[arg.arg] = {"type": type(choices[0]).__name__ if choices else annotation.split(" | ")[0],
+            "nullable": "None" in annotation, "required": i < count,
+            **({"enum": list(choices)} if choices else {}),
+            **({"default": ast.literal_eval(function.args.defaults[i - count])} if i >= count else {})}
+    return parameters
 
 
 def validation_schema():
     kinds = {"int": "integer", "float": "number", "str": "string", "bool": "boolean"}
     return {"type": "object", "additionalProperties": False,
-            "properties": {key: {"type": kinds[meta["type"]]} for key, meta in _cli_parameters("validate_structure").items()
+            "properties": {key: {"type": kinds[meta["type"]], **({"enum": list(meta["enum"])} if "enum" in meta else {})}
+                           for key, meta in _cli_parameters("validate_structure").items()
                            if key not in {"folder", "file_name"}},
             "description": "Optional acceptance parameters. Omit or repeat identical parameters to reuse the current build validation receipt. Changed parameters require validation. Use snake_case names; folder and file_name are supplied by the host from structure_path."}
 
@@ -88,6 +104,9 @@ def _skill_argv(command, values):
                  isinstance(value, str) and bool(value.strip()))
         if not valid:
             issues.append({"field": key, "message": f"Supply a finite {kind} value of the declared type."})
+            continue
+        if "enum" in meta and value not in meta["enum"]:
+            issues.append({"field": key, "message": "Choose one of the declared values.", "allowed_values": list(meta["enum"])})
             continue
         argv.extend(("--" + key.replace("_", "-"), str(value).lower() if kind == "bool" else str(value)))
     if issues:
@@ -240,9 +259,13 @@ def validation_step_function(evidence, definitions, invoke, stopped):
             return {"ok": False, "error": {"code": "validation_cli_error", "kind": "step_contract",
                 "command_dispatched": True, "message": "The Skill CLI rejected arguments before validation. Check the equipped/linked Skill and its declared parameters. Keep the structure unchanged."},
                 "validation": result}
+        if report.get("error") and "violations" not in report:
+            return {"ok": False, "error": {"code": "validation_unavailable", "kind": "native_dependency",
+                "command_dispatched": True, "message": "The validator did not produce a scientific verdict. Inspect its parameter, input or dependency error and correct that cause or report the blocker. Do not redesign the scientific method from this error alone."},
+                "validation": result, "report": report}
         bound = report.get("file") == structure_path
         passed = bool(bound and payload.get("exit_code") == 0 and report.get("passed") is True)
-        next_action = (evidence.actions.next_action(evidence)[0] if passed else
+        next_action = (evidence.actions.next_action(evidence, structure_path=structure_path)[0] if passed else
             "Use the independent measurements to assess the current execution or patch one failed check. Stage acceptance is unchanged.")
         return {"ok": passed, "validation": result, "report": report, "artifact_bound": bound,
                 "next_action": next_action,
@@ -325,14 +348,11 @@ async def run_delivery_step(evidence: Any, definitions: Any, invoke: Any, stoppe
                          operation_ids=list(evidence.skill_operations))
         result = await operation("run_skill_script", {"sandbox": sandbox, "skill": skill,
                                                       "script": "scripts/structure_inspect.py", "argv": argv})
-        def before_wait(operation_id):
-            evidence.notice("structure_builder", "Waiting for delivery Skill operation; no additional model request",
-                            workflow_event="delivery_command_wait", operation_id=operation_id, sandbox=sandbox)
-            return 30
         try:
             result = await collect_operation_result(result, lambda op, seconds: operation(
                 "wait_sandbox_operation", {"sandbox": sandbox, "operation_id": op, "wait_seconds": seconds}),
-                stopped, before_wait=before_wait)
+                stopped, on_progress=lambda payload: evidence.sandbox_wait_progress(payload,
+                    sandbox=sandbox, workflow_event="delivery_command_wait"))
         except OperationReceiptMismatch as exc:
             return error("delivery_pending", str(exc), operation_id=_payload(exc.pending).get("operation_id"))
         payload = _payload(result)
