@@ -37,16 +37,27 @@ it('keeps the IDE in collapsed developer tools and returns to the Library after 
 const installedContentPack = { id: 'local.research', name: 'Research kit', version: '1.0.0', selected: true, loaded: false,
   kind: 'content' as const, environment: null };
 
-it('keeps hosted collections available without exposing plugin installation or store controls', async () => {
+it('lets hosted users browse Store while keeping installation controls unavailable', async () => {
   vi.spyOn(hostedAuth, 'isHosted').mockReturnValue(true);
-  useCardLibrary.setState({ snapshot: snapshot(), open: true, tab: 'store', refresh: async () => {} });
+  useCardLibrary.setState({ snapshot: snapshot(), open: true, tab: 'packs', refresh: async () => {} });
   useWorldStore.setState({ legions: [] });
   await act(async () => { render(<CardLibrary />); });
-  expect(screen.queryByRole('button', { name: 'Store' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Store' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Install Pack from File...' })).toBeNull();
   expect(screen.queryByLabelText('Pack file')).toBeNull();
   expect(worldApi.getInstalledPacks).not.toHaveBeenCalled();
   expect(screen.getByRole('heading', { name: 'Pack inventory' })).toBeTruthy();
+});
+
+it('enables the existing installer for an operator-enabled hosted administrator', async () => {
+  vi.spyOn(hostedAuth,'isHosted').mockReturnValue(true);
+  vi.spyOn(hostedAuth,'canManageHostedPacks').mockReturnValue(true);
+  useCardLibrary.setState({snapshot:snapshot(),open:true,tab:'packs',refresh:async()=>{}});
+  useWorldStore.setState({legions:[]});
+  await act(async()=>{render(<CardLibrary/>);});
+  expect(screen.getByRole('button',{name:'Install Pack from File...'})).toBeTruthy();
+  expect(worldApi.getInstalledPacks).toHaveBeenCalled();
+  expect(screen.queryByText('Developer tools')).toBeNull();
 });
 
 it('adds an installed file to the inventory immediately and closes its installation panel', async () => {
