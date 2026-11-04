@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest';
 import { worldApi } from '../api/client';
 import { PackStore } from './PackStore';
+import { StorePackPreview } from './StorePackPreview';
+import { paintPackCover } from './pack3d/artwork';
 import type { StoreDetail, StorePack, StorePage, StoreState, StoreVersion } from '../types/packs';
 
 vi.mock('./pack3d/artwork', () => ({ paintPackCover: vi.fn() }));
@@ -10,23 +12,26 @@ vi.mock('./pack3d/artwork', () => ({ paintPackCover: vi.fn() }));
 const state: StoreState = { installed_version: null, loaded_version: null, available_version: '0.10.0', update_available: false, restart_required: false, can_install: true };
 const pack: StorePack = { ...state, id: 'example.greeter', name: 'Greeter', summary: 'External Greeter Pack', description: 'A greeting card.', latest_version: '0.10.0' };
 const detail: StoreDetail = { ...pack, versions: ['0.10.0'], versions_next_cursor: null };
+const iconUrl = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg"><path d="M2 2h20v20H2z"/></svg>');
+const artworkUrl = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg"><rect width="20" height="20" fill="red"/></svg>');
 const version: StoreVersion = { ...state, pack_id: pack.id, version: '0.10.0', size_bytes: 10, sha256: '0'.repeat(64), manifest: {
   id: pack.id, version: '0.10.0', compatibility: { oaw: '>=0.1.0', plugin_api: '1.23', frontend_api: 1 },
   dependencies: { packs: [{ id: 'science.viewer', version: '>=1' }] }, runtime: { sandbox: { python: ['colorama==0.4.6'] } },
 } };
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-it('uses authored packaging in the catalog and the reviewed version preview in details', async () => {
-  const preview = { packaging: 'premium' as const, accent_color: '#aa3366', count: 3 };
+it('uses authored packaging and artwork in the catalog and the reviewed version preview in details', async () => {
+  const preview = { packaging: 'premium' as const, accent_color: '#aa3366', count: 3, icon: 'bot', icon_url: iconUrl, artwork_url: artworkUrl };
   vi.spyOn(worldApi, 'getStorePacks').mockResolvedValue({ items: [{ ...pack, preview }], next_cursor: null });
   vi.spyOn(worldApi, 'getStorePack').mockResolvedValue({ ...detail, preview });
-  vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue({ ...version, preview: { ...preview, packaging: 'collector' } });
+  vi.spyOn(worldApi, 'getStoreVersion').mockResolvedValue({ ...version, preview: { ...preview, packaging: 'collector', icon_url: artworkUrl, artwork_url: iconUrl } });
   const install = vi.spyOn(worldApi, 'installStorePack');
   const view = render(<PackStore />);
   const open = await screen.findByRole('button', { name: 'View Greeter details' });
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-packaging')).toBe('premium');
   expect(view.container.querySelector('.library-pack')?.getAttribute('style')).toContain('#aa3366');
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-renderer')).toBe('fallback');
+  expect(paintPackCover).toHaveBeenLastCalledWith(expect.any(HTMLCanvasElement), expect.objectContaining({ icon: iconUrl, artwork: artworkUrl }));
   const copy = view.container.querySelector('.pack-catalog-copy')!;
   expect(copy.textContent).toBe(pack.name);
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-pack-version')).toBe('0.10.0');
@@ -34,7 +39,19 @@ it('uses authored packaging in the catalog and the reviewed version preview in d
   fireEvent.click(open);
   await screen.findByText('colorama==0.4.6');
   expect(view.container.querySelector('.library-pack')?.getAttribute('data-packaging')).toBe('collector');
+  expect(paintPackCover).toHaveBeenLastCalledWith(expect.any(HTMLCanvasElement), expect.objectContaining({ icon: artworkUrl, artwork: iconUrl }));
   expect(install).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['remote URL', 'https://third-party.example/image.png'],
+  ['non-image data', 'data:text/html;base64,PHNjcmlwdD4='],
+  ['oversized image', 'data:image/png;base64,' + 'A'.repeat(4 * Math.ceil((256 * 1024 + 1) / 3))],
+])('keeps catalog icons without loading untrusted preview images: %s', (_name, value) => {
+  const view = render(<StorePackPreview pack={{ ...pack, preview: { packaging: 'standard', icon: 'bot', icon_url: value, artwork_url: value } }} onClick={() => {}} />);
+  expect(view.container.querySelector('.pack-icon-source .lucide-bot')).toBeTruthy();
+  expect(view.container.querySelector('.catalog-asset-icon')).toBeNull();
+  expect(paintPackCover).toHaveBeenLastCalledWith(expect.any(HTMLCanvasElement), expect.objectContaining({ artwork: undefined, icon: expect.stringContaining('data:image/svg+xml,') }));
 });
 
 it('searches and paginates with the server cursor', async () => {

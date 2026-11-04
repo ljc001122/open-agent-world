@@ -1,4 +1,5 @@
 from copy import deepcopy
+import base64
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
@@ -53,7 +54,9 @@ def test_store_search_detail_get_restart_and_already_installed(store):
 
 def test_store_preserves_remote_preview_without_loading_pack_code(store):
     client, fake = store
-    preview = {'packaging': 'paper', 'accent_color': '#aabbcc', 'count': 2}
+    image = 'data:image/svg+xml;base64,' + base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M2 2h20v20H2z"/></svg>').decode()
+    preview = {'packaging': 'paper', 'accent_color': '#aabbcc', 'count': 2,
+               'icon': 'bot', 'icon_url': image, 'artwork_url': image}
 
     async def transport(request):
         response = fake(request)
