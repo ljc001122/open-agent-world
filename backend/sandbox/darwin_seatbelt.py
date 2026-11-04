@@ -237,6 +237,14 @@ def minimal_darwin_environment(
         "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "SHELL": "/bin/sh",
         "SANDBOX_RESOURCES": str(resources) if resources is not None else "",
         "NPM_CONFIG_PREFIX": f"{home}/.local",
+        # Configure libraries before Pack import checks as well as user code.
+        # System font helpers can depend on host libraries outside this profile;
+        # Matplotlib versions supporting this setting use their bundled fonts.
+        "MPLCONFIGDIR": str(home / ".cache" / "matplotlib"),
+        "MPL_IGNORE_SYSTEM_FONTS": "1",
+        # Seatbelt does not grant the named semaphores Joblib probes. Declare
+        # that limitation instead of repeating a failed multiprocessing probe.
+        "JOBLIB_MULTIPROCESSING": "0",
     }
     if extra is not None:
         if not isinstance(extra, Mapping):

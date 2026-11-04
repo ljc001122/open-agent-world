@@ -324,6 +324,27 @@ def test_builtin_executable_skill_references_resolve_current_declarations():
     assert pack_profiles.resolve_profiles(plugins, Skill.model_validate(local).runtime_requirements)["python"] == ["ase<4,>=3.23"]
 
 
+def test_atomsculptor_preflight_uses_core_and_each_skills_declared_imports():
+    from backend.plugins.loader import load_plugin_registry
+
+    plugins = load_plugin_registry()
+    core = SkillRuntimeRequirement(owner="atomsculptor", environment="modelling")
+    ordinary = pack_profiles.resolve_profiles(plugins, (core,))
+    assert ordinary["verify_imports"] == ["ase", "numpy"]
+    # Preflight scope is smaller, but preparation still includes optional tools.
+    assert {"mp-api", "pandas", "rdkit", "matplotlib>=3.7"} <= set(ordinary["python"])
+    for name, imports in {
+        "structure-inspect": {"ase", "numpy", "pymatgen.core"},
+        "structure-image": {"ase", "matplotlib", "numpy", "pymatgen.core"},
+        "materials-project-search": {"ase", "numpy", "mp_api.client"},
+        "molecular-structure-creation": {"ase", "numpy", "rdkit.Chem"},
+    }.items():
+        skill = SkillRuntimeRequirement(owner="atomsculptor", environment=name)
+        recipe = pack_profiles.resolve_profiles(plugins, (core, skill))
+        assert set(recipe["verify_imports"]) == imports
+        assert set(ordinary["python"]) <= set(recipe["python"])
+
+
 @pytest.mark.parametrize('argv', [
     ['/custom/python', '-c', 'print(1)'], ['python3.11', '-V'], ['py', '-3', 'probe.py'],
     ['python', '-S', 'probe.py'], ['python', '-uS', '-m', 'probe'],

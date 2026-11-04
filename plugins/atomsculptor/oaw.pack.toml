@@ -29,7 +29,9 @@ target = "sandbox"
 provider = "python"
 management = "legacy-shared"
 prepare = "on-use"
-verify_imports = ["ase", "matplotlib", "mp_api.client", "numpy", "pandas", "pymatgen.core", "rdkit.Chem"]
+# Keep ordinary command admission to the modelling core. All packages below
+# remain prepared; bundled Skills verify their additional imports on use.
+verify_imports = ["ase", "numpy"]
 python = ["ase>=3.22", "matplotlib>=3.7", "mp-api", "numpy>=1.23", "pandas", "pymatgen>=2024.0", "rdkit"]
 
 [prerequisites.model-connection]
@@ -48,6 +50,7 @@ prerequisites = ["model-connection"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy"]
 sources = [{ path = "src/oaw_atomsculptor/skills/crystal-builder/requirements.txt", kind = "requirements" }]
 
 [features.crystal-builder]
@@ -57,6 +60,7 @@ environments = ["crystal-builder"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy", "pymatgen.core"]
 sources = [{ path = "src/oaw_atomsculptor/skills/interface-builder/requirements.txt", kind = "requirements" }]
 
 [features.interface-builder]
@@ -87,6 +91,7 @@ environments = ["molecular-structure-creation"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy"]
 sources = [{ path = "src/oaw_atomsculptor/skills/nanotube-builder/requirements.txt", kind = "requirements" }]
 
 [features.nanotube-builder]
@@ -96,6 +101,7 @@ environments = ["nanotube-builder"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "matplotlib", "numpy", "pymatgen.core"]
 sources = [{ path = "src/oaw_atomsculptor/skills/structure-image/requirements.txt", kind = "requirements" }]
 
 [features.structure-image]
@@ -105,6 +111,7 @@ environments = ["structure-image"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy", "pymatgen.core"]
 sources = [{ path = "src/oaw_atomsculptor/skills/structure-inspect/requirements.txt", kind = "requirements" }]
 
 [features.structure-inspect]
@@ -114,6 +121,7 @@ environments = ["structure-inspect"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy"]
 sources = [{ path = "src/oaw_atomsculptor/skills/structure-perturbation/requirements.txt", kind = "requirements" }]
 
 [features.structure-perturbation]
@@ -123,6 +131,7 @@ environments = ["structure-perturbation"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy", "pymatgen.core"]
 sources = [{ path = "src/oaw_atomsculptor/skills/supercell-builder/requirements.txt", kind = "requirements" }]
 
 [features.supercell-builder]
@@ -132,6 +141,7 @@ environments = ["supercell-builder"]
 target = "sandbox"
 provider = "python"
 management = "legacy-shared"
+verify_imports = ["ase", "numpy", "pymatgen.core"]
 sources = [{ path = "src/oaw_atomsculptor/skills/surface-builder/requirements.txt", kind = "requirements" }]
 
 [features.surface-builder]
