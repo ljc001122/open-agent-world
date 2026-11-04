@@ -1,15 +1,16 @@
 import { useWorldStore } from './worldStore';
 import { useConversationView } from './conversationView';
-import type { WorldCard, WorldEdge, NodeTypeCatalogItem } from '../types/world';
+import type { WorldCard, WorldEdge, NodeTypeCatalogItem, PluginCatalog } from '../types/world';
+import { getConnectionOptions, getRelationshipOptions } from './relationships';
 
 type ConversationView = Pick<ReturnType<typeof useConversationView.getState>, 'sessions' | 'activeConversationId'>;
 
 /** Host-only resolution. Plugin props never carry session IDs or storage keys. */
-export function resolveCardStateSession(id: string, cards: WorldCard[], types: NodeTypeCatalogItem[], view: ConversationView, edges: WorldEdge[] = []): string | undefined {
+export function resolveCardStateSession(id: string, cards: WorldCard[], catalog: PluginCatalog, view: ConversationView, edges: WorldEdge[] = []): string | undefined {
   const card = cards.find(item => item.id === id);
-  const policy = types.find(item => item.id === card?.type)?.state;
+  const policy = catalog.node_types.find(item => item.id === card?.type)?.state;
   if (!card || policy?.mode !== 'scoped' || ((card.state_scope ?? policy.defaultScope) === 'shared' && !policy.followWorkspace)) return undefined;
-  return policy.followWorkspace ? resolveViewingSession(id, cards, types, view, edges) : resolveDocumentSession(id, cards, types, view);
+  return policy.followWorkspace ? resolveViewingSession(id, cards, catalog, view, edges) : resolveDocumentSession(id, cards, catalog.node_types, view);
 }
 
 function resolveDocumentSession(id: string, cards: WorldCard[], types: NodeTypeCatalogItem[], view: ConversationView): string | undefined {
@@ -37,14 +38,21 @@ function resolveDocumentSession(id: string, cards: WorldCard[], types: NodeTypeC
 }
 
 /** UI context hints follow actual sources; the backend validates native grants. */
-export function resolveViewingSession(id: string, cards: WorldCard[], types: NodeTypeCatalogItem[], view: ConversationView, edges: WorldEdge[] = []): string | undefined {
+export function resolveViewingSession(id: string, cards: WorldCard[], catalog: PluginCatalog, view: ConversationView, edges: WorldEdge[] = []): string | undefined {
   const card = cards.find(item => item.id === id);
   if (!card) return undefined;
   const byId = new Map(cards.map(item => [item.id, item]));
-  const hasTrait = (node: WorldCard | undefined, trait: string) => !!node && !!types.find(type => type.id === node.type)?.traits.includes(trait);
-  const links = [...edges.filter(edge => !edge.missing_plugin), ...cards.filter(node => node.equipment).map(node => ({
-    source: node.equipment!.owner_id, target: node.id, relationship: node.equipment!.relationship,
-  }))];
+  const hasTrait = (node: WorldCard | undefined, trait: string) => !!node && !!catalog.node_types.find(type => type.id === node.type)?.traits.includes(trait);
+  const links = [...edges.filter(edge => !edge.missing_plugin), ...cards.flatMap(node => {
+    const owner = node.equipment && byId.get(node.equipment.owner_id);
+    if (!owner || owner.missing_plugin || node.missing_plugin) return [];
+    const options = getConnectionOptions(catalog, owner.type, node.type);
+    const relationship = node.equipment!.relationship ?? options[0]?.value;
+    if (!relationship) return [];
+    const forward = getRelationshipOptions(catalog, owner.type, node.type).some(option => option.value === relationship);
+    if (!forward && !getRelationshipOptions(catalog, node.type, owner.type).some(option => option.value === relationship)) return [];
+    return [{ source: forward ? owner.id : node.id, target: forward ? node.id : owner.id, relationship }];
+  })];
   const visited = new Set<string>();
   let owner = card.equipment?.owner_id ?? card.parent_id;
   while (owner && !visited.has(owner)) {
@@ -74,30 +82,30 @@ export function resolveViewingSession(id: string, cards: WorldCard[], types: Nod
 
 export function viewingSession(id: string): string | undefined {
   const world = useWorldStore.getState();
-  return resolveViewingSession(id, world.cards, world.catalog.node_types, useConversationView.getState(), world.edges);
+  return resolveViewingSession(id, world.cards, world.catalog, useConversationView.getState(), world.edges);
 }
 
 export function useViewingSession(id: string, enabled = true): string | undefined {
   useConversationView(view => {
     if (!enabled) return undefined;
     const world = useWorldStore.getState();
-    return resolveViewingSession(id, world.cards, world.catalog.node_types, view, world.edges);
+    return resolveViewingSession(id, world.cards, world.catalog, view, world.edges);
   });
-  return useWorldStore(world => enabled ? resolveViewingSession(id, world.cards, world.catalog.node_types, useConversationView.getState(), world.edges) : undefined);
+  return useWorldStore(world => enabled ? resolveViewingSession(id, world.cards, world.catalog, useConversationView.getState(), world.edges) : undefined);
 }
 
 export function cardStateSession(id: string): string | undefined {
   const world = useWorldStore.getState();
-  return resolveCardStateSession(id, world.cards, world.catalog.node_types, useConversationView.getState(), world.edges);
+  return resolveCardStateSession(id, world.cards, world.catalog, useConversationView.getState(), world.edges);
 }
 
 export function useCardStateSession(id: string): string | undefined {
   // Subscribe to the resolved scope, not every card or unrelated conversation edit.
   useConversationView(view => {
     const world = useWorldStore.getState();
-    return resolveCardStateSession(id, world.cards, world.catalog.node_types, view, world.edges);
+    return resolveCardStateSession(id, world.cards, world.catalog, view, world.edges);
   });
-  return useWorldStore(world => resolveCardStateSession(id, world.cards, world.catalog.node_types, useConversationView.getState(), world.edges));
+  return useWorldStore(world => resolveCardStateSession(id, world.cards, world.catalog, useConversationView.getState(), world.edges));
 }
 
 export function stateSessionHeaders(sessionId: string | null | undefined): Record<string, string> {
