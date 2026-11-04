@@ -183,7 +183,7 @@ export interface PluginViewProps {
     /** Absent for state.mode=none. The host owns namespace and lifecycle. */
     state?: CardStateStore;
     /** Present only when the developer permits a choice; null restores its default. */
-    setDataPersistence?: (value: "shared" | "session" | null) => Promise<void>;
+    setDataPersistence?: (value: "shared" | "session" | "group" | null) => Promise<void>;
     /** Present only in a deployed Workspace. Reuse the view and hide engineering controls. */
     deployment?: import('../workspace/WorkspaceAccess').PluginDeploymentAccess;
     /** Human configuration of this Environment/Sandbox card. Plugin API 1.42.

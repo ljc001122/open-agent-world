@@ -1,8 +1,9 @@
 """User and live-capability workspace operations using existing Sandbox backends."""
 import base64
+from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.errors import PermissionDeniedError, ResourceValidationError
 from backend.execution_config import configuration_summary
@@ -11,6 +12,7 @@ from backend.skill_runtime import SKILL_SELECTOR
 from backend.capabilities.projection import authorized_resources
 from open_agent_world.skill_packages import Skill, SkillAsset
 from backend.sandbox.models import SandboxNetworkError
+from backend.sandbox.task_workspace import task_path, ensure_directory, path_for, record_shared_input
 
 
 def require_skill(services, skill_id, agent_id=None):
@@ -35,8 +37,9 @@ async def copy_skill(services, sandbox_id, skill_id, source, destination, overwr
         if content is None:
             raise ResourceValidationError("Skill resource is missing")
         data = content.data_base64 if isinstance(content, SkillAsset) else base64.b64encode(content.encode()).decode()
+        await ensure_directory(services, sandbox_id, agent_id)
         return await services._require_sandbox_backend().file_operation(sandbox_id, "write", root="workspace",
-            path=destination, data=data, overwrite=overwrite, create_parents=True)
+            path=task_path(services, sandbox_id, destination, agent_id), data=data, overwrite=overwrite, create_parents=True)
 
 
 async def diagnostics(services, sandbox_id, destination=None):
@@ -86,16 +89,30 @@ async def diagnostics(services, sandbox_id, destination=None):
 
 class WorkspaceList(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    path: str = Field(default="", max_length=4096)
+    scope: Literal["workspace", "all", "shared"] = Field(default="workspace", description="workspace uses the assigned directory; all reads the full Sandbox root (other directories are read only); shared reads the Sandbox's explicit shared/ input folder.")
+    path: str = Field(default="", max_length=4096,
+        description="Workspace-relative directory. Omit or use an empty string for the workspace root; "
+                    "'.' is not accepted. Use forward slashes and no parent traversal.")
     cursor: str = Field(default="", max_length=8192)
     query: str = Field(default="", max_length=256)
+
+    @field_validator('scope', mode='before')
+    @classmethod
+    def legacy_scope(cls, value):
+        return 'workspace' if value == 'task' else value
 
 
 class WorkspacePreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    scope: Literal["workspace", "all", "shared"] = Field(default="workspace", description="Use all for read-only access to other workspace files, or shared for explicit shared/ inputs.")
     path: str = Field(min_length=1, max_length=4096)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=4000, ge=1, le=8000)
+
+    @field_validator('scope', mode='before')
+    @classmethod
+    def legacy_scope(cls, value):
+        return 'workspace' if value == 'task' else value
 
 
 async def inspect_workspace(services, capability, operation, options):
@@ -108,10 +125,22 @@ async def inspect_workspace(services, capability, operation, options):
         if live.kind != capability.kind or live.target_id != capability.target_id:
             raise PermissionDeniedError("Sandbox file access was revoked")
         services.capabilities.require_sandbox_execute(capability.agent_id, live.target_id)
-        arguments = options.model_dump(exclude={"offset", "limit"})
-        result = await services._require_sandbox_backend().file_operation(
-            live.target_id, operation, root="workspace", **arguments)
+        workspace = await ensure_directory(services, live.target_id, capability.agent_id)
+        arguments = options.model_dump(exclude={"offset", "limit", "scope"})
+        prefix = "shared" if options.scope == "shared" else "" if options.scope == "all" else workspace["directory"]
+        arguments["path"] = path_for(prefix, options.path)
+        try:
+            result = await services._require_sandbox_backend().file_operation(
+                live.target_id, operation, root="workspace", **arguments)
+        except FileNotFoundError:
+            if options.scope == 'shared' and operation == 'list' and not options.path:
+                return {'sandbox_id': live.target_id, 'path': '', 'entries': [], 'exists': False,
+                    'scope': 'shared', 'note': 'No shared directory exists; no files were created.'}
+            raise ResourceValidationError(f"Path not found: {options.path or '.'}. File paths are relative to "
+                + ('shared/.' if options.scope == 'shared' else 'the assigned workspace directory; do not prefix that folder name again. Use scope=all for read-only access to the full workspace.')) from None
     if operation == "list":
+        if prefix:
+            result["entries"] = [{**entry, "path": entry["path"][len(prefix) + 1:]} for entry in result.get("entries", [])]
         return {"sandbox_id": live.target_id, "path": options.path, "query": options.query,
                 "scope": "recursive filename search" if options.query.strip() else "directory",
                 **result}
@@ -120,6 +149,10 @@ async def inspect_workspace(services, capability, operation, options):
         return {"sandbox_id": live.target_id, "path": options.path,
                 "state": result.get("state"), **({"limit": result["limit"]} if "limit" in result else {})}
     text = result["text"]
+    if options.scope == "shared":
+        record_shared_input(services, live.target_id, options.path, capability.agent_id)
+    if options.scope == "all":
+        record_shared_input(services, live.target_id, options.path, capability.agent_id, root="")
     offset = min(len(text), options.offset)
     end = min(len(text), offset + options.limit)
     return {"sandbox_id": live.target_id, "path": options.path, "state": "text",

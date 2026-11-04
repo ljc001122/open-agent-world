@@ -33,6 +33,7 @@ class _Binding:
 
 
 class SandboxManager(SandboxBackend):
+    supports_workspace_scopes = True
     supports_invocation_environment = True
     supports_optional_python_runtime = True
     supports_folder_mounts = True
@@ -355,12 +356,18 @@ class SandboxManager(SandboxBackend):
                       invocation_env: Mapping[str, object] | None = None,
                       runtime_mount: RuntimeMount | None = None,
                       python_environment: str = "auto", on_command_start=None,
-                      folder_mounts: Sequence[FolderMount] = ()) -> CommandResult:
+                      folder_mounts: Sequence[FolderMount] = (), working_directory: str = "", workspace_write_directory: str | None = None) -> CommandResult:
         binding = self._binding(sandbox_id)
         if not binding.provisioned:
             raise SandboxStateError("Start the Sandbox before executing commands")
         options = {"runtime_mount": runtime_mount} if runtime_mount is not None else {}
+        if workspace_write_directory is not None:
+            options["workspace_write_directory"] = workspace_write_directory
+        if working_directory:
+            options["working_directory"] = working_directory
         backend = self._backend(binding.resolved_runtime or "")
+        if workspace_write_directory is not None and not backend.supports_workspace_scopes:
+            raise SandboxValidationError("This runtime cannot enforce session/group workspace write restrictions")
         from .commands import needs_managed_python
         managed_python = needs_managed_python(argv, python_environment,
             skill=runtime_mount is not None)

@@ -1,4 +1,4 @@
-import { cardStateSession, stateSessionHeaders } from "../state/cardState";
+import { cardStateSession, viewingSession, stateSessionHeaders } from "../state/cardState";
 import type { BackgroundJob, JobAction, JobsSnapshot } from '../cards/jobTypes';
 import { normalizeCardFinish } from '../cards/cardFinish';
 import { fetchWithRetry } from './fetchWithRetry';
@@ -817,7 +817,7 @@ export const worldApi = {
 
   runAgent(nodeId: string, prompt: string, freshContext = false): Promise<Record<string, unknown>> {
     return request<Record<string, unknown>>(`/agents/${encodeURIComponent(nodeId)}/run`, {
-      method: "POST",
+      method: "POST", headers: stateSessionHeaders(viewingSession(nodeId) ?? 'default'),
       body: JSON.stringify({ prompt, ...(freshContext ? { fresh_context: true } : {}) }),
     });
   },
@@ -1025,16 +1025,20 @@ export const worldApi = {
     return request<SandboxRuntimeCatalog>(`/sandbox/runtimes${refresh ? "?refresh=true" : ""}`);
   },
 
+  workspaceContext(nodeId: string, sessionId?: string): Promise<import('../state/workspaceContext').WorkspaceContext> {
+    return request(`/nodes/${encodeURIComponent(nodeId)}/workspace-context`, { headers: stateSessionHeaders(sessionId ?? 'default') });
+  },
+
   sandboxWorkspace<T = Record<string, unknown>>(nodeId: string, action: string, body?: unknown): Promise<T> {
-    return request<T>(`/sandboxes/${encodeURIComponent(nodeId)}/${action}`, body === undefined ? undefined : { method: "POST", body: JSON.stringify(body) });
+    return request<T>(`/sandboxes/${encodeURIComponent(nodeId)}/${action}`, { headers: stateSessionHeaders(viewingSession(nodeId) ?? 'default'), ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }) });
   },
 
   deleteSandboxFile(nodeId: string, path: string): Promise<{ deleted: string }> {
-    return request(`/sandboxes/${encodeURIComponent(nodeId)}/files?${new URLSearchParams({ path })}`, { method: 'DELETE' });
+    return request(`/sandboxes/${encodeURIComponent(nodeId)}/files?${new URLSearchParams({ path })}`, { method: 'DELETE', headers: stateSessionHeaders(viewingSession(nodeId) ?? 'default') });
   },
 
   moveSandboxFile(nodeId: string, path: string, destination: string): Promise<{ moved: string; destination: string }> {
-    return request(`/sandboxes/${encodeURIComponent(nodeId)}/files/move`, { method: 'POST', body: JSON.stringify({ path, destination }) });
+    return request(`/sandboxes/${encodeURIComponent(nodeId)}/files/move`, { method: 'POST', headers: stateSessionHeaders(viewingSession(nodeId) ?? 'default'), body: JSON.stringify({ path, destination }) });
   },
 
   async downloadSandboxFile(nodeId: string, root: string, path: string, options?: import('../files/transferQueue').TransferOptions): Promise<Blob> {
@@ -1053,7 +1057,7 @@ export const worldApi = {
   },
 
   uploadSandboxEntry(nodeId: string, path: string, file?: File, options?: import('../files/transferQueue').TransferOptions): Promise<{ written?: number; created?: boolean }> {
-    const route = `/sandboxes/${encodeURIComponent(nodeId)}/files?${new URLSearchParams({ path, directory: String(!file) })}`;
+    const route = `/sandboxes/${encodeURIComponent(nodeId)}/files?${new URLSearchParams({ path, directory: String(!file), state_session: viewingSession(nodeId) ?? 'default' })}`;
     if (options) return transferRequest(route, file ?? new Blob(), options);
     return request(route, {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file ?? '',
@@ -1076,10 +1080,11 @@ export const worldApi = {
     });
   },
 
-  executeSandbox(nodeId: string, command: string, pythonEnvironment: "auto" | "managed" = "auto"): Promise<Record<string, unknown>> {
+  executeSandbox(nodeId: string, command: string, pythonEnvironment: "auto" | "managed" = "auto", workingDirectory = ""): Promise<Record<string, unknown>> {
     return request<Record<string, unknown>>(`/sandboxes/${encodeURIComponent(nodeId)}/execute`, {
+      headers: stateSessionHeaders(viewingSession(nodeId) ?? 'default'),
       method: "POST",
-      body: JSON.stringify({ command, ...(pythonEnvironment === "managed" ? { python_environment: "managed" } : {}) }),
+      body: JSON.stringify({ command, ...(pythonEnvironment === "managed" ? { python_environment: "managed" } : {}), ...(workingDirectory ? { working_directory: workingDirectory } : {}) }),
     });
   },
 };

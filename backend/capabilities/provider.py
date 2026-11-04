@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 from backend.agents import ScopedToolDefinition, ToolParameter
 from backend.errors import ResourceValidationError, RuntimeUnavailableError
 from backend.resources.models import TextReplace
+from backend.sandbox.task_workspace import task_path, binding as task_binding, ensure_directory
 
 if TYPE_CHECKING:
     from backend.services import ApplicationServices
@@ -205,9 +206,10 @@ class _CapabilityContext:
                 self.services.capabilities.capability_for_id(capability.agent_id, f"{kind}:{live.target_id}")
             self.services.capabilities.require_sandbox_execute(capability.agent_id, sandbox_id)
             self.services._require_card_type(sandbox_id, "sandbox")
+            await ensure_directory(self.services, sandbox_id, capability.agent_id)
             return await self.services._require_sandbox_backend().file_operation(
-                sandbox_id, "write", root="workspace", path=path,
-                data=base64.b64encode(data).decode("ascii"), overwrite=False,
+                sandbox_id, "write", root="workspace", path=task_path(self.services, sandbox_id, path, capability.agent_id),
+                data=base64.b64encode(data).decode("ascii"), overwrite=False, create_parents=True,
             )
 
     async def write_sandbox_text_file(self, capability, path: str, content: str | None = None,
@@ -236,13 +238,14 @@ class _CapabilityContext:
                 raise PermissionDeniedError("Sandbox file-write capability was revoked")
             self.services.capabilities.require_sandbox_execute(capability.agent_id, live.target_id)
             self.services._require_card_type(live.target_id, "sandbox")
+            await ensure_directory(self.services, live.target_id, capability.agent_id)
             if edits is not None:
                 result = await self.services._require_sandbox_backend().file_operation(
-                    live.target_id, "edit", root="workspace", path=path,
+                    live.target_id, "edit", root="workspace", path=task_path(self.services, live.target_id, path, capability.agent_id),
                     edits=edits)
             else:
                 result = await self.services._require_sandbox_backend().file_operation(
-                    live.target_id, "write", root="workspace", path=path,
+                    live.target_id, "write", root="workspace", path=task_path(self.services, live.target_id, path, capability.agent_id),
                     data=base64.b64encode(raw).decode("ascii"), overwrite=overwrite, create_parents=True)
         return {"path": path, **result}
 
@@ -260,7 +263,7 @@ class _CapabilityContext:
             self.services.capabilities.require_sandbox_execute(capability.agent_id, sandbox_id)
             self.services._require_card_type(sandbox_id, "sandbox")
             result = await self.services._require_sandbox_backend().file_operation(
-                sandbox_id, "download", root="workspace", path=path,
+                sandbox_id, "download", root="workspace", path=task_path(self.services, sandbox_id, path, capability.agent_id),
             )
         if result.get("state") != "ready":
             raise ResourceValidationError("Sandbox file is unavailable or exceeds the 16 MiB transfer limit")
@@ -448,6 +451,8 @@ class _CapabilityContext:
         # and ``configuration.ready`` only reports configured variables. Make
         # the command gate explicit so an errored sandbox is not mistaken for
         # a usable one.
+        workspace_binding = task_binding(self.services, sandbox_id, agent_id)
+        task_directory = workspace_binding["directory"]
         commands_accepted = info.state.value in {"ready", "running"}
         state_guidance = None
         if info.state.value == "error":
@@ -465,7 +470,12 @@ class _CapabilityContext:
             "sandbox_id": sandbox_id, "state": info.state.value,
             "commands_accepted": commands_accepted, "state_guidance": state_guidance,
             "runtime_id": info.runtime_id, "platform": info.platform,
-            "shell": list(info.shell), "workspace": str(info.workspace),
+            "shell": list(info.shell), "workspace": str(info.workspace / task_directory) if task_directory else str(info.workspace),
+            "sandbox_workspace": str(info.workspace),
+            "task_workspace": {key: value for key, value in workspace_binding.items() if key != "shared_inputs"},
+            "shared_input_count": len(workspace_binding.get("shared_inputs", [])),
+            "shared_workspace": str(info.workspace / "shared"),
+            "file_paths": "Relative command/Skill/file-tool paths use workspace. Use scope=all for read-only access to other workspace files, or scope=shared for explicit shared/ inputs.",
             "workspace_access": info.workspace_access.value,
             "resources_path": str(info.resources_path) if info.resources_path else None,
             "available": info.available, "unavailable_reason": info.unavailable_reason,
@@ -485,7 +495,7 @@ class _CapabilityContext:
             "history_scope": history_scope,
             "shared_python": python_status if include_shared_python else None,
             "python_environment": _python_environment_summary(python_status),
-            "console_mode": "non-interactive; each command starts in the configured workspace; cd/export/activation do not persist",
+            "console_mode": "non-interactive; every command and relative file tool uses this assigned workspace; cd/export/activation do not persist",
             "command_timeout": self.services.world.get_card(sandbox_id).config.get("command_timeout", 6000),
             "installation": "Use install_python_packages for the shared read-only Python environment. HOME persists (at /sandbox/home on Linux, WSL and macOS Container VM); use $HOME/.local/bin or $HOME/bin for local CLI tools, or create a private venv in HOME/workspace and invoke its interpreter explicitly. npm -g defaults to $HOME/.local, with bins on PATH. /tmp is recreated for EVERY command; use HOME or workspace for files needed by subsequent commands. Shared installer logs are optional (include_shared_python=true) and do not prove a current operation is running.",
             "attachments": [

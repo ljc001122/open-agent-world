@@ -1109,7 +1109,10 @@ class ApplicationServices:
             )
             try:
                 await transaction.commit()
-                card = self.enrich_card(self.world.update_card(card_id, request))
+                with self.database.transaction(immediate=True):
+                    from backend.workspace_context import preserve_sessions_on_change
+                    preserve_sessions_on_change(self, current, updated)
+                    card = self.enrich_card(self.world.update_card(card_id, request))
             except BaseException as error:
                 rollback_error = await self._rollback_lifecycle(transaction, error)
                 if rollback_error is not None:
@@ -1177,12 +1180,11 @@ class ApplicationServices:
                 for _, transaction in prepared:
                     attempted.append(transaction)
                     await transaction.commit()
-                cards = [
-                    self.enrich_card(card)
-                    for card in self.world.update_cards(
-                        [item for item, _ in prepared]
-                    )
-                ]
+                with self.database.transaction(immediate=True):
+                    from backend.workspace_context import preserve_sessions_on_change
+                    for item, _ in prepared:
+                        preserve_sessions_on_change(self, previous_cards[item.node_id], self.world.preview_update_card(item.node_id, item.patch))
+                    cards = [self.enrich_card(card) for card in self.world.update_cards([item for item, _ in prepared])]
             except BaseException as error:
                 for transaction in reversed(attempted):
                     rollback_error = await self._rollback_lifecycle(transaction, error)
@@ -2181,14 +2183,28 @@ class ApplicationServices:
                     from backend.legions.runtime import LegionStateWrite, write_shared_state
                     write_shared_state(self.world, self.state, node_ids[node.key],
                                        LegionStateWrite(value=node.initial_shared_state, expected_revision=0))
-            for node in scoped_document_seeds:
+            def seed_scoped_document(node):
                 from backend.node_documents import read_document, write_document
                 new_id = node_ids[node.key]
                 spec = self.plugins.node_type(node.type).document
                 kind = self.world.get_card(new_id).state_scope
-                identity = (kind, self.card_state.default_session(new_id) if kind == "session" else "*")
+                session = self.card_state.default_session(new_id)
+                state_policy = self.plugins.node_type(node.type).state
+                if getattr(state_policy, 'follow_workspace', False):
+                    from backend.workspace_context import resolve_workspace
+                    workspace = resolve_workspace(self, new_id, session_id=session)
+                    identity = workspace['scope_type'], workspace['scope_id']
+                elif kind == 'group':
+                    with self.database.locked() as db:
+                        row = db.execute('SELECT group_id FROM conversation_sessions WHERE id=?', (session,)).fetchone()
+                    identity = kind, row['group_id'] if row else session
+                else:
+                    identity = kind, session if kind == 'session' else '*'
                 revision = read_document(self, new_id, state_identity=identity)["revision"]
                 write_document(self, new_id, spec.remap_references(node.initial_document, node_ids), revision, state_identity=identity)
+            for node in scoped_document_seeds:
+                if not getattr(self.plugins.node_type(node.type).state, 'follow_workspace', False):
+                    seed_scoped_document(node)
             from backend.plugin_defaults import restore_metadata, ensure_equipment, adopt_equipment
             with self.events.committed_batch(), self.database.transaction(immediate=True):
                 for node in template_nodes:
@@ -2218,6 +2234,9 @@ class ApplicationServices:
                     target=external.id if binding["internal_is_source"] else internal,
                     relationship=binding["relationship"], direction=binding["direction"],
                 ), _publish_event=False))
+            for node in scoped_document_seeds:
+                if getattr(self.plugins.node_type(node.type).state, 'follow_workspace', False):
+                    seed_scoped_document(node)
         except BaseException as error:
             cleanup_errors = await self._compensate_legion_instance(
                 created_nodes, created_edges, creation_receipts, error
@@ -2526,9 +2545,17 @@ class ApplicationServices:
         await self._publish_resource_modified(document, agent_id=agent_id, operation="patch")
         return document
 
-    async def run_agent(self, agent_id: str, prompt: str, *, context_id: str | None = None) -> dict[str, Any]:
+    async def run_agent(self, agent_id: str, prompt: str, *, context_id: str | None = None,
+                        task_id: str | None = None, parent_run_id: str | None = None,
+                        detached: bool = False) -> dict[str, Any]:
         self._require_agent(agent_id)
-        run = await self._require_run_manager().start_run(agent_id, prompt, context_id=context_id)
+        from backend.card_state import active_state_session, DEFAULT_SESSION
+        from backend.workspace_context import session_context
+        if context_id is None:
+            selected = session_context(self, agent_id)['id'] if active_state_session.get() is not None else None
+            context_id = selected if selected != DEFAULT_SESSION else None
+        run = await self._require_run_manager().start_run(agent_id, prompt, context_id=context_id,
+            task_id=task_id, parent_run_id=parent_run_id, detached=detached)
         return {"accepted": True, "agent_id": agent_id, "run_id": run.run_id}
 
     def conversation_summary(self, conversation_id: str) -> ConversationSummary:
@@ -3192,6 +3219,7 @@ class ApplicationServices:
         environment_id: str | None = None,
         target_id: str | None = None,
         python_environment: str = "auto",
+        _working_directory: str | None = None,
     ) -> CommandResult:
         from backend.sandbox.execution import execute_sandbox
 
@@ -3199,7 +3227,7 @@ class ApplicationServices:
             self, sandbox_id, argv, command=command, timeout_seconds=timeout_seconds,
             agent_id=agent_id, skill_request=_skill_request, background_job_id=_background_job_id,
             keep_on_disconnect=_keep_on_disconnect, operation_id=_operation_id,
-            environment_id=environment_id, target_id=target_id, python_environment=python_environment,
+            environment_id=environment_id, target_id=target_id, python_environment=python_environment, working_directory=_working_directory,
         )
 
     async def _refresh_sandbox_write_mounts(
@@ -3299,7 +3327,7 @@ class ApplicationServices:
         if command_id:
             payload["command_id"] = command_id
         if current:
-            payload.update(caller=current["caller"], run_id=current.get("run_id"))
+            payload.update(caller=current["caller"], run_id=current.get("run_id"), working_directory=current.get('working_directory', ''))
         active = [dict(item) for item in self._sandbox_commands.values() if item["sandbox_id"] == event.sandbox_id]
         payload["active_commands"] = [{key: item.get(key) for key in ("id", "caller", "run_id", "argv", "started_at")}
             for item in active if item["state"] == "running" and not (event.type == SandboxEventType.COMMAND_FINISHED and item["id"] == command_id)]

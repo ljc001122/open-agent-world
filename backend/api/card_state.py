@@ -11,6 +11,24 @@ from backend.errors import PermissionDeniedError, ResourceValidationError, Confl
 router = APIRouter(prefix="/nodes", tags=["card-state"])
 
 
+@router.get('/{node_id}/workspace-context')
+async def workspace_context(node_id: str, services=Depends(get_services)):
+    from backend.workspace_context import resolve_workspace
+    async with services._node_mutation(read_only=True):
+        services.world.require_available_card(services.world.get_card(node_id))
+        value = resolve_workspace(services, node_id, allow_unbound=True)
+        if value.get('sandbox_id') and value.get('writable_directory'):
+            from backend.sandbox.task_workspace import ensure_directory
+            from backend.sandbox.models import SandboxStateError, SandboxNotFoundError
+            from backend.card_state import state_session
+            try:
+                with state_session(value['session_id']):
+                    value = {**value, **(await ensure_directory(services, value['sandbox_id']))}
+            except (SandboxStateError, SandboxNotFoundError):
+                pass  # Viewing never provisions a runtime or prepares Python.
+        return value
+
+
 class StateWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
     value: dict[str, Any] = Field(default_factory=dict)
@@ -50,7 +68,7 @@ async def delete_state(node_id: str, request: StateWrite, services=Depends(get_s
 
 class NamespaceSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    scope_type: Literal["shared", "session"]
+    scope_type: Literal["shared", "session", "group"]
     scope_id: str = Field(min_length=1, max_length=100)
     values: dict[Literal["document", "data"], dict[str, Any]]
 
@@ -98,6 +116,8 @@ async def restore_state(node_id: str, request: CardStateSnapshot, services=Depen
                     raise ResourceValidationError("Snapshot has an unsupported namespace")
                 if entry.scope_type == "session" and entry.scope_id != "default" and not db.execute("SELECT 1 FROM conversation_sessions WHERE id=?", (entry.scope_id,)).fetchone():
                     raise ResourceValidationError("Snapshot's conversation session no longer exists")
+                if entry.scope_type == 'group' and entry.scope_id != 'default' and not db.execute('SELECT 1 FROM conversation_groups WHERE id=?', (entry.scope_id,)).fetchone():
+                    raise ResourceValidationError("Snapshot's conversation group no longer exists")
                 scope = services.card_state.scope(node_id, (entry.scope_type, entry.scope_id))
                 for key, value in entry.values.items():
                     limit = 256 * 1024

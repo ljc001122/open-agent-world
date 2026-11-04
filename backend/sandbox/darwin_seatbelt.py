@@ -123,7 +123,7 @@ def seatbelt_profile(
     python_runtime: Path | Sequence[Path] | None = None,
     *,
     workspace_access: ResourceAccess = ResourceAccess.READ_WRITE,
-    proxy_ports: Sequence[int] = (),
+    proxy_ports: Sequence[int] = (), workspace_write_directory: str | None = None,
 ) -> str:
     """Generate a deny-default Seatbelt profile for one command execution.
 
@@ -144,7 +144,11 @@ def seatbelt_profile(
     # remain private command scratch space and therefore stay writable.
     read_subpaths.append(str(workspace))
     if workspace_access == ResourceAccess.READ_WRITE:
-        write_subpaths.append(str(workspace))
+        if workspace_write_directory is None:
+            write_subpaths.append(str(workspace))
+        elif workspace_write_directory:
+            from .workspace_access import writable_path
+            write_subpaths.append(str(writable_path(workspace, workspace_write_directory)))
     for managed in (home, tmpdir):
         read_subpaths.append(str(managed))
         write_subpaths.append(str(managed))
@@ -152,7 +156,8 @@ def seatbelt_profile(
     for attachment in attachments:
         source = str(attachment.source)
         read_subpaths.append(source)
-        if attachment.access == ResourceAccess.READ_WRITE:
+        from .workspace_access import mount_access
+        if mount_access(workspace, attachment.source, attachment.access, workspace_write_directory) == ResourceAccess.READ_WRITE:
             write_subpaths.append(source)
 
     if runtime_mount is not None:
@@ -299,6 +304,7 @@ class DarwinSeatbeltBackend(SandboxBackend):
     intentionally no subprocess or path-only fallback.
     """
 
+    supports_workspace_scopes = True
     supports_invocation_environment = True
     supports_execution_policy = True
     # Like Windows, ordinary commands, shells and installed CLIs all use the
@@ -611,7 +617,9 @@ class DarwinSeatbeltBackend(SandboxBackend):
         runtime_mount: RuntimeMount | None = None,
         execution_policy: Mapping[str, Any] | None = None,
         managed_python: bool = True,
+        working_directory: str = "", workspace_write_directory: str | None = None,
     ) -> CommandResult:
+        from .files import working_path
         policy = execution_policy or {}
         self.validate_execution_policy(policy)
         if type(managed_python) is not bool:
@@ -676,7 +684,7 @@ class DarwinSeatbeltBackend(SandboxBackend):
             tuple(owner.attachments.values()), mount,
             ((self.python_runtime.base, self.python_runtime.venv)
                 if managed_python and self.python_runtime else None),
-            workspace_access=owner.workspace_access,
+            workspace_access=owner.workspace_access, workspace_write_directory=workspace_write_directory,
             proxy_ports=execution.proxy.ports if execution.proxy else (),
         )
 
@@ -706,7 +714,7 @@ class DarwinSeatbeltBackend(SandboxBackend):
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
                 env=environment,
-                cwd=str(workspace),
+                cwd=str(working_path(workspace, working_directory)),
                 limit=32 * 1024 * 1024)
             execution.process = process
             assert process.stdout and process.stderr

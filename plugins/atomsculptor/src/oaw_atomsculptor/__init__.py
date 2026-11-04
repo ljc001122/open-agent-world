@@ -8,6 +8,7 @@ document contract rather than on the retired AtomSculptor Sandbox APIs.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 import json
 from typing import Literal
 from uuid import uuid4
@@ -27,6 +28,7 @@ from open_agent_world.plugin_api import (
     PackDefinition,
     PluginDescriptor,
     RelationshipDefinition,
+    ScopedStateSpec,
 )
 from open_agent_world.skill_packages import register_skill_package
 
@@ -422,6 +424,7 @@ class AtomSculptorPlugin:
         registration.register_node_type(
             NodeTypeDefinition(
                 id="atomsculptor.structure",
+                state=ScopedStateSpec(supported_scopes=('shared', 'session', 'group'), default_scope='session', follow_workspace=True),
                 label="Atom Structure",
                 description="A versioned atomistic structure with stable atom identities and layers.",
                 icon="atom",
@@ -484,6 +487,9 @@ class AtomSculptorPlugin:
                 templateable=True,
             )
         )
+        # Keep the automatically equipped toolbox internal in the native catalog.
+        registration.nodes["atomsculptor.skills"] = replace(
+            registration.nodes["atomsculptor.skills"], user_creatable=False)
         registration.register_pack(
             PackDefinition(
                 id="atomsculptor.default",

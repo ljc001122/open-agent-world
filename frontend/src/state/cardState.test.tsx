@@ -5,11 +5,11 @@ import { worldApi } from '../api/client';
 import { useWorldStore } from './worldStore';
 import { useConversationView } from './conversationView';
 import { TEST_CATALOG } from './catalog.fixture';
-import { resolveCardStateSession, useCardStateSession } from './cardState';
+import { resolveCardStateSession, resolveViewingSession, useCardStateSession } from './cardState';
 import { TaskBoardBody } from '../cards/TaskBoard';
 import { clearTaskBoardCache } from '../cards/taskBoardCache';
 import { useNodeSurfaceStore } from './nodeSurfaces';
-import type { NodeTypeCatalogItem, WorldCard } from '../types/world';
+import type { NodeTypeCatalogItem, WorldCard, WorldEdge } from '../types/world';
 
 const board: WorldCard = { id: 'board', type: 'oaw.tasks', name: 'Tasks', status: 'available', config: { description: 'Same config' },
   state_scope: 'session', position: { x: 0, y: 0 }, size: { width: 360, height: 240 }, expanded: false };
@@ -78,4 +78,22 @@ it('does not rerender a stateless card when unrelated cards or conversation sele
   act(() => useWorldStore.setState({ cards: [board, { ...board, id: 'unrelated' }] }));
   act(() => useConversationView.getState().selectSession('other-chat', 'B'));
   expect(rendered).toHaveBeenCalledTimes(initial);
+});
+
+it('resolves only connected Conversation sources independently for each Sandbox', () => {
+  const card = (id: string, type: string): WorldCard => ({ ...board, id, type });
+  const cards = [card('a', 'agent'), card('b', 'agent'), card('s1', 'sandbox'), card('s2', 'sandbox'),
+    card('c1', 'conversation'), card('c2', 'conversation'), card('unconnected', 'sandbox'), card('viewer', 'text')];
+  const edge = (source: string, target: string, relationship: string): WorldEdge => ({ id: source + target, source, target, relationship, direction: 'forward' });
+  const edges = [edge('a', 's1', 'execute'), edge('a', 'c1', 'participate'), edge('b', 's2', 'execute'), edge('b', 'c2', 'participate'),
+    edge('a', 'viewer', 'read_edit'), edge('viewer', 's2', 'core.file-preview')];
+  const view = { activeConversationId: 'c2', sessions: { c1: 'one', c2: 'two' } };
+  const resolve = (id: string, links = edges) => resolveViewingSession(id, cards, TEST_CATALOG.node_types, view, links);
+  expect(resolve('unconnected')).toBeUndefined();
+  expect(resolve('s1')).toBe('one');
+  expect(resolve('s2')).toBe('two');
+  expect(resolve('viewer')).toBe('two');
+  const shared = [...edges, edge('a', 'c2', 'participate')];
+  expect(resolve('s1', shared)).toBe('two');
+  expect(resolveViewingSession('s1', cards, TEST_CATALOG.node_types, { ...view, activeConversationId: 'other' }, shared)).toBeUndefined();
 });
