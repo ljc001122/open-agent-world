@@ -49,6 +49,36 @@ def test_unconnected_sandbox_does_not_adopt_a_world_conversation(runtime_client)
         assert binding(services, sandbox['id'], agent['id'])['session_id'] == 'default'
 
 
+@pytest.mark.parametrize('caller, context_id', [('summon', 'private-model-context'), ('user', 'fresh-model-context')])
+def test_private_run_context_is_not_a_conversation_selection(runtime_client, caller, context_id):
+    from backend.sandbox.task_workspace import initial_policy
+    from backend.workspace_context import resolve_workspace
+    client, _, _ = runtime_client
+    agent, sandbox, *_ = setup_skill(client)
+    services = client.app.state.services
+    run = services.run_manager.store.create(agent_id=agent['id'], runtime_provider_id='core.mock',
+        caller_kind=caller, context_id=context_id)
+    run = services.run_manager.store.update_lifecycle(run.run_id, task_workspace=initial_policy(
+        services.run_manager.store, agent_id=run.agent_id, run_id=run.run_id, caller_kind=caller))
+    with in_run(run):
+        workspace = resolve_workspace(services, sandbox['id'])
+        assert workspace['session_id'] == 'default' and workspace['conversation_id'] is None
+        with pytest.raises(ResourceValidationError, match='no longer exists'):
+            resolve_workspace(services, sandbox['id'], session_id=context_id)
+
+
+def test_deleted_conversation_run_context_does_not_fall_back(runtime_client):
+    from backend.workspace_context import resolve_workspace
+    client, _, _ = runtime_client
+    agent, sandbox, *_ = setup_skill(client)
+    room, session, _, _ = setup_sessions(client)
+    services = client.app.state.services
+    run = new_run(services, agent, session=session, caller='conversation')
+    services.conversations.delete_session(room['id'], session.id)
+    with in_run(run), pytest.raises(ResourceValidationError, match='no longer exists'):
+        resolve_workspace(services, sandbox['id'])
+
+
 def test_multiple_conversations_require_context_and_do_not_guess_or_prebind(runtime_client):
     client, _, _ = runtime_client
     agent, sandbox, *_ = setup_skill(client)

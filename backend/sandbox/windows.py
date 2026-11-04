@@ -180,12 +180,11 @@ class WindowsSandboxBackend(SandboxBackend):
                 return self._info(record)
             # Reassert the native ACL so external ACL removal cannot turn into
             # silent partial functionality after an application restart.
-            await asyncio.to_thread(
-                self._native.grant_workspace,
-                record.root / "workspace",
-                record.profile.sid,
-                read_only=False,
-            )
+            interrupted = await self._security_mutation(
+                lambda item: self._native.grant_workspace(
+                    item.root / "workspace", item.profile.sid, read_only=False), record)
+            if interrupted:
+                raise asyncio.CancelledError
             if record.workspace_path is not None:
                 interrupted = await self._security_mutation(self._grant_workspace, record)
                 if interrupted:
@@ -199,7 +198,7 @@ class WindowsSandboxBackend(SandboxBackend):
             except BaseException:
                 record.state = SandboxState.STOPPED
                 if record.workspace_path is not None:
-                    await asyncio.to_thread(self._revoke_workspace, record)
+                    await self._security_mutation(self._revoke_workspace, record)
                 raise
         await self._emit_state(record)
         return self._info(record)

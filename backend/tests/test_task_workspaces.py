@@ -316,6 +316,6 @@ def test_report_collects_only_the_selected_task_and_explicit_continuation_chain(
         cwd=task_root, capture_output=True, text=True, timeout=60)
     assert built.returncode == 0, built.stderr
     result = json.loads(built.stdout)
-    assert result["statistics"]["attempts"] == 2 and result["previews"] == 1
+    assert result["statistics"]["attempts"] == 2 and result["previews"] == 1, result.get('warnings')
     assert (task_root / result["report"]).is_file()
     assert (task_root / result["bundle"]).is_file()

@@ -40,10 +40,6 @@ def session_context(services, card_id, session_id=None, *, allow_unbound=False):
         selected = invocation.context_id
     else:
         selected = active_state_session.get()
-    # Native fresh model contexts have no Conversation session. Keep their
-    # model identity on the Run and use the standalone file workspace.
-    if invocation is not None and session_id is None and selected and selected.startswith('isolated:'):
-        selected = DEFAULT_SESSION
     sources = None
     if selected in (None, DEFAULT_SESSION) and invocation is None and session_id is None:
         selected = _owner_session(services, card_id)
@@ -65,7 +61,13 @@ def session_context(services, card_id, session_id=None, *, allow_unbound=False):
                 if row['conversation_id'] not in sources:
                     raise ResourceValidationError('This Conversation is not connected to the workspace through an Agent')
             return dict(row)
-        raise ResourceValidationError('The selected conversation session no longer exists')
+        # A model context is not necessarily a Conversation session. Resolve
+        # its native Run lineage; explicit selections and deleted Conversation
+        # sessions still fail instead of falling back to another workspace.
+        run = services.run_manager.get_run(invocation.run_id) if invocation is not None and session_id is None else None
+        conversation_session = services.run_manager._conversation_scope(run)[1] if run else selected
+        if run is None or conversation_session == selected:
+            raise ResourceValidationError('The selected conversation session no longer exists')
     return {'id': DEFAULT_SESSION, 'conversation_id': None, 'group_id': DEFAULT_SESSION,
         'title': 'Default session', 'group_title': 'Default group'}
 

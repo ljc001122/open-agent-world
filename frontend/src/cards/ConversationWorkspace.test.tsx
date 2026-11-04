@@ -84,8 +84,9 @@ describe("ConversationWorkspace snapshots", () => {
     render(<ConversationWorkspace card={card} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Review safe continuation' }));
     const composer = screen.getByLabelText('Conversation message') as HTMLTextAreaElement;
-    expect(composer.value).toContain('Continue the original task');
-    expect(composer.value).not.toContain('capability_kind');
+    expect(composer.value).toContain('"target_id": "skill"');
+    expect(composer.value).toContain('"capability_kind": "skills.read"');
+    expect(composer.value).not.toContain('failed-run');
     expect(screen.getByText('Continuing the original task')).toBeTruthy();
     fireEvent.change(composer, { target: { value: 'Continue, keeping the requested dimensions.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
