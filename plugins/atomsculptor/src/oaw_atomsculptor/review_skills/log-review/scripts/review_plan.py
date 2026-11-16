@@ -52,6 +52,23 @@ def declared_files(tool):
     return list(dict.fromkeys((path, relation) for path, relation in files if path))
 
 
+def retained_files(root, attempt, commands):
+    items = []
+    for saved in attempt.get("outputs", []):
+        if saved["command_id"] not in commands:
+            continue
+        item = {"version_id": saved.get("version_id"), "workspace_path": saved["workspace_path"],
+                "command_id": saved["command_id"], "provenance": "missing", "relation": "output",
+                "note": "Native structure write; the retained version could not be collected."}
+        if saved.get("provenance") == "historical":
+            source = attempt["directory"] / saved["path"]
+            if source.is_file() and source.resolve().is_relative_to(attempt["directory"]):
+                item.update(path=source.relative_to(root).as_posix(), provenance="historical",
+                    note="Exact file saved by this Sandbox command.")
+        items.append(item)
+    return items
+
+
 def native_plan(root, attempts, operation_rows):
     """A graph of executions/structure actions; every other call stays in the ledger."""
     by_tool = {(a['run']['run_id'], t['id']): (a, t) for a in attempts for t in a['tools']}
@@ -80,8 +97,9 @@ def native_plan(root, attempts, operation_rows):
         return (origin, path)
 
     last_writer = {}
-    for index, (_, attempt, tool, _) in enumerate(selected):
-        for path, relation in declared_files(tool):
+    for index, (_, attempt, tool, fresh) in enumerate(selected):
+        paths = declared_files(tool) + [(item["workspace_path"], "output") for item in retained_files(root, attempt, fresh)]
+        for path, relation in paths:
             if relation == 'output':
                 last_writer[file_identity(attempt, path)] = index
     nodes = []
@@ -101,7 +119,14 @@ def native_plan(root, attempts, operation_rows):
                 node['title'] += ' · v' + str(saved_step['source_version'])
         if len(fresh) == 1 and fresh[0] in command_ids(tool.get('response')):
             node['command_id'] = fresh[0]
+        historical = retained_files(root, attempt, fresh)
+        if tool['name'] == 'run_delivery_step':
+            for item in historical:
+                item['relation'] = 'unchanged'  # Conversion preserves the supplied geometry.
+        node['structures'].extend(historical)
         for path, relation in declared_files(tool):
+            if any(item["workspace_path"] == path for item in historical):
+                continue
             paths = file_candidates(root, attempt, path)
             newer = last_writer.get(file_identity(attempt, path), index) > index
             if len(paths) == 1 and not newer:
@@ -122,7 +147,7 @@ def native_plan(root, attempts, operation_rows):
         for i, command in enumerate(attempt['commands'], 1):
             if (attempt['run']['run_id'], command['id']) in seen_commands:
                 continue
-            references = []
+            references = retained_files(root, attempt, [command['id']])
             argv = command.get('argv', [])
             if isinstance(argv, list):
                 # These are the existing Skill CLI's literal file selectors,
@@ -133,6 +158,8 @@ def native_plan(root, attempts, operation_rows):
                     if flag not in options:
                         continue
                     path = str(PurePosixPath(options.get('--folder', '.')) / options[flag]) if flag == '--file-name' else options[flag]
+                    if any(item.get("workspace_path") == path for item in references):
+                        continue
                     paths = file_candidates(root, attempt, path)
                     if len(paths) == 1:
                         references.append({'path': paths[0], 'provenance': 'collection_snapshot',
@@ -202,6 +229,11 @@ def compile_notes(root, attempts, operation_rows, notes):
                 if not isinstance(change['parents'], list) or any(parent not in nodes for parent in change['parents']):
                     raise ReviewValidationError('parents must reference modification step short IDs', pointer + '/node/parents')
                 change['parents'] = [nodes[parent]['id'] for parent in change['parents']]
+            if "structures" in change and isinstance(change["structures"], list):
+                retained = [item for item in nodes[step]["structures"] if "version_id" in item]
+                paths = {item.get("path") for item in retained if item.get("path")}
+                change["structures"] = retained + [item for item in change["structures"]
+                    if not isinstance(item, dict) or item.get("path") not in paths]
             nodes[step].update(change)
     for key in ('title', 'summary'):
         if not isinstance(notes.get(key, ''), str):

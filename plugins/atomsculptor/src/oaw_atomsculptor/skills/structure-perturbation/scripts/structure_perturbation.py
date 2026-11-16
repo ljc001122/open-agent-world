@@ -9,7 +9,8 @@ from oaw_runtime import (
 import numpy as np
 from pathlib import Path
 from typing import Optional
-from ase.io import read, write
+from ase.io import read
+from structure_versions import write_structure as write
 from ase.data import covalent_radii
 
 

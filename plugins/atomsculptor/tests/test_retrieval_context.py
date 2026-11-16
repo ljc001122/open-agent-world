@@ -76,7 +76,13 @@ async def test_locate_raw_source_by_lines_query_symbol_and_read_the_patched_vers
     assert 'def conditional' in (await read('box', 'step.py', symbol='conditional'))['text']
     assert len(calls) == 2  # Reads and AST parsing dispatch no Sandbox commands.
     assert (await read('box', 'step.py', offset=len(SOURCE) + 1))['error']['code'] == 'source_range'
-    assert (await read('box', 'step.py', query='missing text'))['error']['code'] == 'source_query'
+    spaced = await read('box', 'step.py', query='return value+1')
+    assert spaced['match_kind'] == 'whitespace' and spaced['matches'] == query['matches']
+    assert spaced['text'] == query['text']
+    missing = (await read('box', 'step.py', query='value = np.array'))['error']
+    assert missing['code'] == 'source_query'
+    assert {'symbol': 'compute', 'line': line + 1} in missing['available_symbols']
+    assert any(hint['line'] == line + 2 for hint in missing['identifier_matches'])
     assert (await read('box', 'step.py', offset=1, symbol='compute'))['error']['code'] == 'source_selector'
     for field in ('start_line', 'end_line', 'query', 'symbol'):
         assert field in FunctionTool(read)._get_declaration().parameters_json_schema['properties']

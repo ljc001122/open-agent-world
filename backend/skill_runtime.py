@@ -50,7 +50,7 @@ def skill_script_schema():
 
 
 def resolve_skill_mount(services, agent_id: str, sandbox_id: str, request: RunSkillScript,
-                        *, runtime_requirements=()):
+                        *, runtime_requirements=(), retain_outputs=False):
     """Called at command submission, never from saved equipment or tool state."""
     services.capabilities.require_sandbox_execute(agent_id, sandbox_id)
     skill_node = services.world.get_card(request.skill_id)
@@ -74,5 +74,5 @@ def resolve_skill_mount(services, agent_id: str, sandbox_id: str, request: RunSk
     if references:
         from backend.sandbox.pack_profiles import bind_profiles
         return bind_profiles(services.plugins, references, bundle,
-                             interpreter, request.script_path, request.argv)
+                             interpreter, request.script_path, request.argv, retain_outputs=retain_outputs)
     return argv, mount

@@ -973,7 +973,13 @@ class ModellingWorkflow:
                         from .execution_steps import TARGET_RECOVERY_SCHEMA
                         declaration.parameters = None
                         declaration.parameters_json_schema = deepcopy(TARGET_RECOVERY_SCHEMA)
-                        recovery = evidence.steps.target_recovery(evidence) if evidence is not None else None
+                        input_check = evidence.steps.pending_input_check() if evidence is not None else None
+                        if input_check and input_check["operation_id"]:
+                            schema = declaration.parameters_json_schema
+                            for key in ("subtask_id", "script_path"):
+                                schema["properties"][key]["enum"] = [input_check[key]]
+                            schema["properties"].pop("corrections", None)
+                        recovery = evidence.steps.target_recovery(evidence) if evidence is not None and not input_check else None
                         if recovery:
                             for key in ("subtask_id",):
                                 declaration.parameters_json_schema["properties"][key]["enum"] = [recovery[key]]
@@ -1505,7 +1511,7 @@ class ModellingWorkflow:
             if (self.current not in EXPERIMENT_SCOPES or self.blocked or evidence.block_reason
                     or self.review_request is not None or self._pending_review is not None or evidence.closing_reason
                     or any((evidence.executions, evidence.pending, evidence.inline_executions, evidence.inline_pending,
-                            evidence.skill_operations, evidence.delivery_uncertainty))
+                            evidence.skill_operations, evidence.delivery_uncertainty, evidence.steps.pending_input_check()))
                     or any(history.get(key) for key in ("pending_operations", "pending_skill_operations", "unknown_executions", "unknown_imports"))):
                 return self.error("refinement_unavailable", "Resolve the current blocker, review or native pending/unknown effects before refining an action.")
             if evidence.scripts or history.get("scripts"):

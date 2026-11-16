@@ -9,7 +9,7 @@ from typing import Optional
 
 from ase import Atoms
 from ase.build import bulk
-from ase.io import write
+from structure_versions import write_structure as write
 import numpy as np
 
 from oaw_runtime import (

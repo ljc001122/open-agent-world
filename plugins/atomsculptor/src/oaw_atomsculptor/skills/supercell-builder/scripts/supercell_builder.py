@@ -4,7 +4,8 @@ from typing import Optional
 
 import numpy as np
 from ase.build import make_supercell
-from ase.io import read, write
+from ase.io import read
+from structure_versions import write_structure as write
 
 from oaw_runtime import build_cli_parser, run_cli
 from oaw_runtime import display_path, resolve_output_path, workspace_root

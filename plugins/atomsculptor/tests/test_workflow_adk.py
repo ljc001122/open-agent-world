@@ -46,6 +46,22 @@ async def test_real_adk_requires_plan_and_executes_all_stages_once(managed, obje
             names = [d.name for t in request.config.tools or [] for d in t.function_declarations or []]
             snapshots = [json.loads(p.text.split("\n", 1)[1]) for c in request.contents for p in c.parts
                          if p.text and p.text.startswith("HOST RUN EVIDENCE")]
+            if not snapshots:
+                assert code_first and builder_turns in (0, 1)
+                assert request.config.max_output_tokens == model_output
+                name = ("inspect_sandbox", "start_sandbox")[builder_turns]
+                assert set(names) == {name, "finish_task"}
+                assert any(p.text and p.text.startswith("HOST ACTION STATE") and REQUEST in p.text
+                           for c in request.contents for p in c.parts)
+                builder_turns += 1
+                args = {"sandbox": "box"}
+                parts = [types.Part(function_call=types.FunctionCall(
+                    id=f"call-{root_turns}-{planner_turns}-{builder_turns}", name=name, args=args))]
+                if name == "start_sandbox":
+                    parts.append(types.Part(function_call=types.FunctionCall(id="duplicate-start", name=name, args=args)))
+                    yield LlmResponse(partial=True, content=types.Content(role="model", parts=parts))
+                yield LlmResponse(content=types.Content(role="model", parts=parts))
+                return
             snapshot = snapshots[-1]
             assert len(snapshots) == 1
             stable = [json.loads(p.text.split("\n", 1)[1]) for c in request.contents for p in c.parts if p.text and p.text.startswith("HOST STABLE CONTEXT")][-1]
@@ -427,9 +443,11 @@ async def test_real_adk_latest_failure_is_bounded_and_missing_skill_stops_before
         async def generate_content_async(self, request, stream=False):
             nonlocal root_turns, builder_turns
             names = [d.name for t in request.config.tools or [] for d in t.function_declarations or []]
-            if "advance_modelling_stage" in names:
+            if {"advance_modelling_stage", "inspect_sandbox", "start_sandbox"}.intersection(names):
                 builder_turns += 1
-                if builder_turns in {2, 4}:
+                if builder_turns in {2, 4, 5}:
+                    if builder_turns == 5:
+                        assert set(names) == {"advance_modelling_stage", "finish_task"}
                     yield LlmResponse(content=types.Content(role="model", parts=[types.Part(thought=True, text="Long topology derivation")]),
                         finish_reason="MAX_TOKENS")
                     return
@@ -472,7 +490,9 @@ async def test_real_adk_latest_failure_is_bounded_and_missing_skill_stops_before
         assert events[-1].run_status == 'failed' and 'single bounded recovery' in events[-1].payload['error']
         assert any(e.payload.get('kind') == 'execution_closeout' for e in events)
     assert dispatched == ([] if missing_skill else ["inspect_sandbox", "start_sandbox"])
-    assert builder_turns == (0 if missing_skill else 4)
+    assert builder_turns == (0 if missing_skill else 5)
+    assert len([event for event in events if event.payload.get("recovery_event") == "model_output_recovery"]) == (
+        0 if missing_skill else 2)
     assert not any(e.run_status == "succeeded" for e in events)
     assert runtime.active == {}
 

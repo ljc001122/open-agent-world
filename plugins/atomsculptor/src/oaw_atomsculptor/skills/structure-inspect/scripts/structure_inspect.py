@@ -7,7 +7,8 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from ase.data import covalent_radii
-from ase.io import read, write
+from ase.io import read
+from structure_versions import save_structure, write_structure as write
 from ase.neighborlist import neighbor_list
 
 from oaw_runtime import build_cli_parser, run_cli
@@ -358,7 +359,8 @@ def to_atomsculptor_document(folder: str, file_name: str, output_name: str | Non
         if not output_name.lower().endswith(".json"):
             return {"error": "output_name must end with .json"}
         output_path = resolve_output_path(output_name)
-        output_path.write_text(_json.dumps(result["document"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        save_structure(output_path, lambda target: target.write_text(
+            _json.dumps(result["document"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8"))
         return {"output_document_file": display_path(output_path),
                 "input_structure_file": display_path(source_path),
                 "atom_count": len(entries), "size_bytes": output_path.stat().st_size}

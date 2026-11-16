@@ -11,6 +11,9 @@ import math
 from pathlib import Path
 import sys
 
+if __package__:
+    from .structure_versions import write_structure
+
 
 def _json_value(value):
     if isinstance(value, dict):
@@ -234,12 +237,12 @@ def artifact(path, *, units, frame, components, layout=None):
 def write_extxyz(path, atoms):
     """Use ASE's standard serializer and prove file round-trip, not geometry acceptance."""
     import numpy as np
-    from ase.io import read, write
+    from ase.io import read
     target = Path(path)
     if not target.resolve().is_relative_to(Path.cwd().resolve()):
         raise ValueError("Structure output must stay inside the Sandbox workspace")
     target.parent.mkdir(parents=True, exist_ok=True)
-    write(target, atoms, format="extxyz")
+    write_structure(target, atoms, format="extxyz")
     back = read(target, format="extxyz")
     if (not np.array_equal(back.numbers, atoms.numbers) or not np.array_equal(back.pbc, atoms.pbc)
             or not np.allclose(back.positions, atoms.positions, atol=1e-8, rtol=0)

@@ -46,6 +46,7 @@ class ExecutionActions:
         self.validated_files = set()
         self.readbacks = set()
         self.output_token_ceiling = None
+        self.preparation_tool = None
         self.response_rejections = []
 
     def enabled(self, evidence, role):
@@ -77,10 +78,20 @@ class ExecutionActions:
                     {"finish_task"} | ({"install_python_packages", "inspect_sandbox", "start_sandbox", "read_tool_result"} & names))
         return None
 
-    def next_action(self, evidence, *, structure_path=""):
+    def next_action(self, evidence, *, structure_path="", for_request=False):
         workflow = evidence.workflow
         names = workflow.tool_names or frozenset()
         exits = {"finish_task", "advance_modelling_stage"}
+        input_check = evidence.steps.pending_input_check()
+        if input_check:
+            allowed = {"finish_task", "inspect_sandbox"}
+            if input_check["operation_id"]:
+                return ("Collect the retained input check with resume_modelling_step: " +
+                        json.dumps(input_check, ensure_ascii=False) +
+                        ". Use the same subtask_id and script_path with no corrections. "
+                        "Modelling has not been saved or dispatched.", allowed | {"resume_modelling_step"})
+            return ("The input check has no confirmed receipt or operation ID. Inspect the native Sandbox "
+                    "and report blocked if it cannot be identified. Modelling has not been saved or dispatched.", allowed)
         if evidence.executions:
             return ("A script dispatch has no confirmed result. Inspect native Sandbox state/receipts; "
                     "do not edit or resubmit it. Report the outcome as unknown/blocked if it cannot be confirmed.",
@@ -160,7 +171,7 @@ class ExecutionActions:
         recovery = evidence.steps.target_recovery(evidence)
         if recovery:
             return ("Retained execution-field correction only: " + json.dumps(recovery, ensure_ascii=False) +
-                    ". Call resume_modelling_step with these IDs, a single corrected script_path and reason. "
+                    ". Call resume_modelling_step with these IDs, a single corrected script_path. A reason is optional. "
                     "Supply corrections only for rejected execution fields or previous_assessment. "
                     "Use expected_script_path to correct the submitted action; an unexecuted LOCAL subtask's filename "
                     "may instead be explicitly corrected. The rejected action is retained in host memory; "
@@ -221,13 +232,17 @@ class ExecutionActions:
                     advance + ". Keep the recorded assessment; subtask_complete requires outcome=continue.", None)
         if workflow.current in {"probe", "build"}:
             if not self.sandbox_states and "inspect_sandbox" in names:
-                return "Inspect the authorized Sandbox state before the current action.", exits | {"inspect_sandbox", "inspect_atom_structure"}
+                if for_request:
+                    self.preparation_tool = "inspect_sandbox"
+                return "Inspect the authorized Sandbox state before the current action.", {"inspect_sandbox", "finish_task"}
             unavailable = [(box, state) for box, state in self.sandbox_states.items() if state not in {"ready", "running"}]
             if unavailable and not any(state in {"ready", "running"} for state in self.sandbox_states.values()):
                 box, state = unavailable[0]
                 if "start_sandbox" not in names:
                     evidence.stop(f"Sandbox {box} is {state}; connect Execute + Start/Stop or start it from its card")
-                return f"Start Sandbox {box} ({state}); obtain readiness before computing.", exits | {"start_sandbox"}
+                if for_request:
+                    self.preparation_tool = "start_sandbox"
+                return f"Start Sandbox {box} ({state}); obtain readiness before computing.", {"start_sandbox", "finish_task"}
         planned = workflow.pending_experiment
         if (planned and planned["plan_revision"] == workflow.plan_revision and planned["stage"] == workflow.current
                 and planned.get("origin", "planner_review") != "stage"):
@@ -308,6 +323,9 @@ class ExecutionActions:
             return "Inspect actual stderr, repair the saved probe or request plan review if the assumption is invalid.", None
         if workflow.current == "build":
             action = workflow.pending_experiment or workflow.plan[workflow.index]["experiment"]
+            refine = (" If the first action bundles dependent results, call advance_modelling_stage(stage='refine') "
+                      "with one executable next_experiment and a reason. It changes only the action."
+                      if not evidence.scripts and not (evidence.continuation or {}).get("scripts") else "")
             return (f"Implement the next executable result of the committed method in {action['artifact']}; generate known inputs "
                     "and measure derived values in that code. If a later choice depends on an unknown quantity, "
                     "compute it and save the useful intermediate first; decide the dependent code from that output. "
@@ -315,7 +333,7 @@ class ExecutionActions:
                     "The stage checks are final acceptance, not a requirement to solve every uncertainty before this step. "
                     f"Current question: {action['question']} Method: {action['method']} "
                     "Inspect actual candidate failures before choosing a repair. Keep final acceptance checks "
-                    "unchanged; stop at the experiment's finite limit.", None)
+                    "unchanged; stop at the experiment's finite limit." + refine, None)
         action = workflow.plan[0]["experiment"]
         save = ("Save the input-measurement script at " + action["artifact"] + "; answer: " + action["question"] +
                 ". Scope=input_measurement: answer the missing input question using a method appropriate to it. "
@@ -331,6 +349,8 @@ class ExecutionActions:
 
     def prepare(self, evidence, role, request, bindings):
         workflow = evidence.workflow
+        if role == "structure_builder":
+            self.preparation_tool = None
         # A blocked workflow has exactly one exit. Collapse the advertised
         # tools to it and say so, instead of letting the model spend turns
         # discovering that every other call now returns workflow_blocked.
@@ -384,7 +404,8 @@ class ExecutionActions:
             self.progress_key, self.requests_without_progress = key, 0
         # Observing host-owned running work is not model-only stagnation and
         # not successful computation either: freeze, never reset, this count.
-        if not (evidence.pending or evidence.inline_pending or evidence.skill_operations):
+        if not (evidence.pending or evidence.inline_pending or evidence.skill_operations
+                or evidence.steps.pending_input_check()):
             self.requests_without_progress += 1
         brake = evidence.limits.model_requests_without_progress
         if brake is not None and self.requests_without_progress > brake:
@@ -402,24 +423,25 @@ class ExecutionActions:
                 # Honor an explicitly configured legacy request brake. The
                 # default count is telemetry, not a scientific failure.
                 evidence.stop("no new execution/assessment/checkpoint within the explicitly configured model action budget")
-        self.last_action, self.allowed = self.next_action(evidence)
+        self.last_action, self.allowed = self.next_action(evidence, for_request=True)
         repair = evidence.workflow.local_repair(evidence) if evidence.steps.available else None
         feedback = evidence.correction_feedback
         requires_closeout = (feedback and feedback.get("plan_revision") == evidence.workflow.plan_revision
                              and feedback.get("kind") in {"plan_review", "workflow_blocked"})
-        if (repair and not requires_closeout and not evidence.closing_reason
+        if (repair and not self.preparation_tool and not requires_closeout and not evidence.closing_reason
                 and not self.environment_action(evidence)
                 and evidence.time_budget()["phase"] != "closeout"
-                and not evidence.steps.target_recovery(evidence)
+                and not evidence.steps.target_recovery(evidence) and not evidence.steps.pending_input_check()
                 and not (evidence.executions or evidence.pending or evidence.inline_pending or evidence.skill_operations)):
             self.last_action = "Local execution/format repair: " + json.dumps(repair, ensure_ascii=False)
             self.allowed = {"advance_modelling_stage", "finish_task", "run_modelling_step"} | READ_DEPENDENCIES
         latest = evidence.latest_experiment()
-        if (self.allowed is not None and evidence.scripts and evidence.workflow.current in {"probe", "build"}
+        if (not self.preparation_tool and self.allowed is not None and evidence.scripts and evidence.workflow.current in {"probe", "build"}
                 and evidence.time_budget()["phase"] != "closeout" and not evidence.closing_reason):
             self.allowed.add("read_modelling_source")
-        if (self.allowed is not None and latest is not None and not
-                (evidence.executions or evidence.pending or evidence.inline_pending or evidence.skill_operations)
+        if (not self.preparation_tool and self.allowed is not None and latest is not None and not
+                (evidence.executions or evidence.pending or evidence.inline_pending or evidence.skill_operations
+                 or evidence.steps.pending_input_check())
                 and evidence.workflow.current in {"probe", "build"}):
             self.allowed |= READ_DEPENDENCIES & (evidence.workflow.tool_names or frozenset())
         if evidence.steps.available and self.allowed is None and evidence.workflow.current in {"probe", "build"}:
@@ -435,19 +457,23 @@ class ExecutionActions:
                 current_tools.add("run_skill_script")
             self.allowed = current_tools
             if evidence.workflow.ready_execution(evidence) is None:
+                if "run_skill_script" in current_tools and "run_skill_script" in (workflow.tool_names or ()):
+                    self.last_action += " If an authorized Skill covers this step, run it with run_skill_script and inspect its saved result."
                 self.last_action += (" Use run_modelling_step for new scripts (source required in arguments), "
                     "patch_modelling_step for repairs (exact edits required), rerun_modelling_step for saved inputs, "
                     "or rewrite_modelling_step for an explicit replacement. Answer ONE current question with code, measured expected_output "
                     "and a finite stop_condition. The host saves and executes it without another model turn in between. "
                     "Check current_experiment.assessment_status: pending requires one brief assessment, either separately with observe "
                     "or combined using previous_assessment. Recorded means OMIT previous_assessment and proceed using the immutable host record. "
-                    "Do not solve later questions before this result. Reuse saved artifacts; patch one measured failure at a time.")
-        if (self.allowed is not None and evidence.workflow.current in {"probe", "build"}
+                    "Use saved artifact handoffs and measure one unresolved condition before designing later steps. "
+                    "Patch one measured failure at a time.")
+        if (not self.preparation_tool and self.allowed is not None and evidence.workflow.current in {"probe", "build"}
                 and evidence.artifact_handoffs
                 and not self.environment_action(evidence)
                 and not evidence.workflow.review_request and not evidence.workflow.blocked and not evidence.closing_reason
                 and evidence.time_budget()["phase"] != "closeout"
-                and not (evidence.executions or evidence.pending or evidence.inline_pending or evidence.skill_operations)):
+                and not (evidence.executions or evidence.pending or evidence.inline_pending or evidence.skill_operations
+                         or evidence.steps.pending_input_check())):
             self.allowed.add("validate_modelling_artifact")
             if evidence.workflow.ready_execution(evidence) is None:
                 self.last_action += " Independent validation is available for exact HOST artifact paths; reuse validate_modelling_artifact before writing another verifier."
@@ -460,21 +486,22 @@ class ExecutionActions:
             self.last_action += (" Run closeout reserve has begun. Validate and deliver an already finished candidate, "
                 "or report the actual unfinished checkpoint and saved artifacts. Do not start a new redesign/scan.")
         config = getattr(request, "config", None)
-        if self.allowed is not None and any(d.name == "read_tool_result"
+        if not self.preparation_tool and self.allowed is not None and any(d.name == "read_tool_result"
                 for tool in getattr(config, "tools", None) or []
                 for d in getattr(tool, "function_declarations", None) or []):
             # Archive read-back is local and read-only, including while an
             # assessment or plan correction is pending.
             self.allowed.add("read_tool_result")
         self.output_token_ceiling = None
-        if (config is not None and evidence.output_recoveries.get(role, 0)
+        recovery_used = evidence.output_recovery_used(role)
+        if (config is not None and recovery_used
                 and evidence.limits.recovered_action_output_tokens is not None):
             # Apply only an explicitly configured recovery cap. Action-focused
             # guidance must not silently shrink OAW's chosen reasoning budget.
             ceiling = evidence.limits.recovered_action_output_tokens
             config.max_output_tokens = min(config.max_output_tokens or ceiling, ceiling)
             self.output_token_ceiling = config.max_output_tokens
-        if evidence.output_recoveries.get(role, 0):
+        if recovery_used:
             self.last_action += (" Output-limit recovery has been used: follow the current next action "
                                  "using saved facts and native receipts; do not repeat the discarded derivation.")
         if config is not None and bindings is not None:
@@ -512,6 +539,7 @@ class ExecutionActions:
 
     def snapshot(self):
         return {"next_action": self.last_action, "requests_without_progress": self.requests_without_progress,
+                "sandbox_preparation_tool": self.preparation_tool,
                 "action_recoveries": self.recoveries,
                 "action_recovery_policy": "Correct the current rejected action; the cumulative count is telemetry, not a Run limit.",
                 "sandbox_states": self.sandbox_states,
@@ -620,11 +648,17 @@ async def collect_script_operation(evidence, definitions, invoke, semantic_name,
     if not (saved or inline or preparation or pending):
         return result
     waiter = next((d for d in definitions if evidence.semantic_tool(d.name) == "wait_sandbox_operation"), None)
+    if saved and waiter is not None:
+        evidence.pending.setdefault(operation, [(key, evidence.scripts[key].version)])
+    return await collect_sandbox_operation(evidence, waiter, invoke, result, stopped, sandbox=sandbox,
+                                           workflow_event="modelling_command_wait")
+
+
+async def collect_sandbox_operation(evidence, waiter, invoke, result, stopped, *, sandbox, workflow_event):
     if waiter is None:
         return result
-    if saved:
-        evidence.pending.setdefault(operation, [(key, evidence.scripts[key].version)])
-    def before_wait(operation_id):
+
+    def before_wait(_operation_id):
         remaining = evidence.remaining_seconds
         if remaining is not None and remaining <= .01:
             evidence.stop("run time budget reached while collecting a Sandbox command")
@@ -633,6 +667,6 @@ async def collect_script_operation(evidence, definitions, invoke, semantic_name,
         return await collect_operation_result(result, lambda op, seconds: invoke(waiter.capability_id,
             {"sandbox": sandbox, "operation_id": op, "wait_seconds": seconds}), stopped, before_wait=before_wait,
             on_progress=lambda payload: evidence.sandbox_wait_progress(payload, sandbox=sandbox,
-                workflow_event="modelling_command_wait"))
+                workflow_event=workflow_event))
     except OperationReceiptMismatch as exc:
         return exc.pending

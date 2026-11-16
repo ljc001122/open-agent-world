@@ -80,7 +80,7 @@ async def test_sdk_retains_first_rejection_then_resumes_exact_code_once():
     await invoke("run_modelling_step", {**args, "source": "print('a guessed replacement')"})
     assert e.steps.target_recovery(e) == recovery and not calls
     assert args["source"] not in json.dumps(e.steps.snapshot())
-    result = await invoke("resume_modelling_step", correction(recovery))
+    result = await invoke("resume_modelling_step", {"subtask_id": recovery["subtask_id"], "script_path": "next.py"})
     assert result["ok"] and result["target_correction"]["code_reused"]
     assert files["next.py"] == args["source"]
     assert len(calls) == 2 and calls[1][1]["argv"][-1] == "next.py"
@@ -164,7 +164,7 @@ async def test_recovery_request_exposes_only_small_corrective_tool_on_actual_wir
     schema = next(t["function"]["parameters"] for t in tools if t["function"]["name"] == "resume_modelling_step")
     Draft202012Validator.check_schema(schema)
     assert set(schema["properties"]) == {"subtask_id", "script_path", "reason", "corrections"}
-    assert Draft202012Validator(schema).is_valid(correction(recovery))
+    assert Draft202012Validator(schema).is_valid({"subtask_id": recovery["subtask_id"], "script_path": "next.py"})
     assert Draft202012Validator(schema).is_valid({**correction(recovery), 'corrections': {'input_manifest_path': None}})
     assert schema["properties"]["subtask_id"]["enum"] == [recovery["subtask_id"]]
 

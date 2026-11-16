@@ -114,6 +114,12 @@ async def test_exit_zero_continuation_restores_editable_source_without_promoting
     for source_run in ("original-run", "continued-run"):
         new = evidence()
         assert new.restore_continuation(checkpoint, source_run)
+        history = new.continuation["current_experiment"]
+        assert history["assessment_status"] == "pending"
+        historical = history["historical_measurements"]
+        assert historical["source_run_id"] == "original-run"
+        assert historical["kind"] == report["kind"]
+        assert bool(historical["failed_checks"]) == (report_kind == "failed_diagnostic")
         new.configure_tools(definitions)
         new.steps.available = True
         await new.reconcile_continuation(definitions, invoke, asyncio.Event())

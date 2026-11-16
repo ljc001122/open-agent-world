@@ -16,6 +16,7 @@ figure { margin:0; min-width:0; }
 .structure-image img { display:block; max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; }
 figcaption { font-size:11px; color:#71838d; text-align:center; padding-top:8px; }
 .preview-missing { flex-direction:column; font-size:13px; color:#71838d; background:#f8f9fa; }
+.version-gap { grid-column:1/-1; color:#71838d; font-size:13px; margin:6px 0; }
 .preview-missing span { font-size:28px; }
 .preview-missing p { margin:0; }
 .chain-step.action { max-width:680px; margin:auto; padding:6px 0; font-size:15px; }

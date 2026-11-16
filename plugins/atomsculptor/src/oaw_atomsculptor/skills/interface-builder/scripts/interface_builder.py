@@ -2,7 +2,8 @@
 from pathlib import Path
 from typing import Optional
 
-from ase.io import read, write
+from ase.io import read
+from structure_versions import write_structure as write
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.io.ase import AseAtomsAdaptor

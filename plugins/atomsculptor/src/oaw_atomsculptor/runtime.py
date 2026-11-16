@@ -83,10 +83,12 @@ Ask coordinator/Builder for a missing file fact. Call finish_task immediately af
 
 For a custom workflow, use build, deliver by default; prepend probe only when a
 specific missing input prevents construction. Known primitive inputs can be
-computed in the construction script. Choose one method and the next useful saved
+computed in the construction script. Choose one method and the first useful saved
 result with a literal script path, question, method and finite stopping rule.
 Keep the stage goal separate from that first result: expected_output describes
 what the next execution can measure or save, not every final deliverable.
+State the first action so Builder can submit it immediately. When later work
+depends on its result, leave that work in the stage goal and acceptance checks.
 A finite task can complete in one script; split expensive or dependent work into
 measurable intermediates. If a later construction or checker depends on an unknown
 quantity, make the next experiment compute that quantity and save a reusable
@@ -156,8 +158,10 @@ Keep assumptions and delegation advice separate from user requirements.
 
 Choose a concrete method and produce a useful executable result early. Compute
 coordinates, derived values, optimization and uncertain checker tests in Sandbox
-code. Inspect actual results before choosing the next experiment. Split at real
-dependencies; known primitive inputs can be generated within construction.
+code. If the current method hinges on an unresolved condition, first execute
+the smallest calculation that measures it and use that result to decide the
+next experiment. Carry forward confirmed files through HOST artifact handoffs
+with their units, frames and labels. Split at real dependencies.
 A finite task can finish in one script. Retain useful intermediates with units,
 coordinate frames, component labels and generation parameters.
 For work on a supplied structure, inspect its actual revision and use
@@ -168,8 +172,11 @@ was supplied, state what input you construct and the scope of those claims.
 Use the equipped authorized toolbox and exact selectors. Bundled Skill IDs use
 underscores, e.g. `structure_inspect` and `nanotube_builder`. Read relevant Skill
 instructions with include_file_contents=false; use file_path for a needed reference
-or source file. Reuse visible facts and the projected result readers for bounded
-archived evidence without another environment scan.
+or source file. When an authorized Skill covers the current subtask and satisfies
+the user requirements, prefer its existing CLI through run_skill_script. Inspect
+its saved output, then write custom code for the remaining work. Reuse visible
+facts and the projected result readers for bounded archived evidence without
+another environment scan.
 
 Save modelling code through the step tools, or write_sandbox_text_file followed
 by direct python3 argv with that path. Code in thoughts, shell heredocs or an
@@ -229,6 +236,9 @@ in advance_modelling_stage identify the checkpoint being completed, not the
 destination stage.
 
 HOST modelling_io provides load_inputs, write_extxyz and emit_measurements.
+Save each reportable structure through write_extxyz or write_structure (other ASE
+formats). Each save keeps its own source file for Report, including candidates
+that fail later checks and multiple saves to the same filename.
 HOST measurement_contract contains diagnostic/candidate examples and an authorized
 Skill reference for the complete schema. Preserve actual failures, coverage,
 HOST check_ids and artifact bindings; a format repair can re-envelope saved data.

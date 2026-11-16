@@ -106,10 +106,10 @@ async def test_ready_environment_forces_save_then_execute_and_wait_without_rewri
     e = setup()
     await activate(e)
     req = request(); prepare(e, req)
-    assert declarations(req) == {"inspect_sandbox", "inspect_atom_structure", "finish_task", "advance_modelling_stage"}
+    assert declarations(req) == {"inspect_sandbox", "finish_task"}
     await tool(e, "inspect_sandbox", {"sandbox": "box"}, {"state": "stopped"})
     req = request(); prepare(e, req)
-    assert declarations(req) == {"start_sandbox", "finish_task", "advance_modelling_stage"}
+    assert declarations(req) == {"start_sandbox", "finish_task"}
     await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
     req = request(); prepare(e, req)
     assert {"write_sandbox_text_file", "execute_command", "inspect_sandbox", "read_skill"} <= declarations(req)
@@ -260,12 +260,19 @@ async def test_long_thought_or_disallowed_action_recovers_once_to_real_next_step
 
 
 @pytest.mark.asyncio
-async def test_latest_max_tokens_start_max_tokens_stops_without_replay():
+async def test_preparation_and_construction_recover_once_per_native_action():
+    from test_candidate_first_workflow import direct_plan
     e = setup()
-    await activate(e)
-    await tool(e, "inspect_sandbox", {"sandbox": "box"}, {"state": "stopped"})
-    req = request(); prepare(e, req)
-    await e.trace.callbacks("structure_builder")["before_model_callback"](None, req)
+    await tool(e, "finish_task", {"result": direct_plan()}, "Task completed.", role="planner")
+    assert e.workflow.before_delegation("structure_builder") is None
+    e.steps.available = True
+    stage = e.workflow.plan[0]
+    checks = e.workflow.requirements()
+    first = {**stage["experiment"], "artifact": "intermediate.py",
+             "question": "What is the measured size of the input?",
+             "method": "Read the authorized input and measure its size.",
+             "expected_output": "One saved measured intermediate.", "stop_condition": "One measurement."}
+    names = TOOLS | {"run_modelling_step"}
     calls = 0
     limits = []
 
@@ -276,18 +283,71 @@ async def test_latest_max_tokens_start_max_tokens_stops_without_replay():
             nonlocal calls
             calls += 1
             limits.append(req.config.max_output_tokens)
-            yield response("start_sandbox" if calls == 2 else None, truncated=calls != 2)
+            text = "\n".join(p.text for c in req.contents for p in c.parts if p.text)
+            if calls <= 3:
+                action = "inspect_sandbox" if calls < 3 else "start_sandbox"
+                assert declarations(req) == {action, "finish_task"}
+                assert "HOST ACTION STATE" in text and e.original_request in text
+                assert "HOST STABLE CONTEXT" not in text and "HOST RUN EVIDENCE" not in text
+                if calls != 1:
+                    yield response(action)
+                    return
+            elif calls == 5:
+                assert declarations(req) == {"advance_modelling_stage", "finish_task"}
+                declaration = next(d for t in req.config.tools for d in t.function_declarations
+                                   if d.name == "advance_modelling_stage")
+                assert declaration.parameters_json_schema["properties"]["stage"]["enum"] == ["refine"]
+                assert "HOST STABLE CONTEXT" not in text
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=
+                    types.FunctionCall(id="refine", name="advance_modelling_stage", args={
+                        "stage": "refine", "reason": "Measure the prerequisite first", "next_experiment": first}))]),
+                    finish_reason="STOP")
+                return
+            else:
+                assert "run_modelling_step" in declarations(req) and "HOST STABLE CONTEXT" in text
+            reply = response(truncated=True)
+            reply.usage_metadata.thoughts_token_count = 1024
+            yield reply
 
     model = bounded_output_model(Fixture(), e.trace, "structure_builder", e, SimpleNamespace(types=types), 16384)
-    accepted = [r async for r in model.generate_content_async(req)]
-    assert len(accepted) == 1
-    await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
-    req = request(); prepare(e, req)
+    for expected, state in [("inspect_sandbox", "stopped"), ("start_sandbox", "ready"),
+                            ("advance_modelling_stage", None)]:
+        req = request(names); prepare(e, req)
+        await e.trace.callbacks("structure_builder")["before_model_callback"](None, req)
+        accepted = [r async for r in model.generate_content_async(req)]
+        call = accepted[0].content.parts[0].function_call
+        assert call.name == expected
+        if state:
+            await tool(e, call.name, {"sandbox": "box"}, {"state": state}, call_id=call.id)
+        else:
+            assert e.workflow.advance(e, **call.args)["action_refined"]
+    assert e.workflow.pending_experiment["artifact"] == "intermediate.py"
+    assert e.workflow.requirements() == checks
+    req = request(names); prepare(e, req)
     await e.trace.callbacks("structure_builder")["before_model_callback"](None, req)
     with pytest.raises(AgentRuntimeError, match="single bounded recovery"):
         _ = [r async for r in model.generate_content_async(req)]
-    assert calls == 3 and not e.scripts and not e.imports
-    assert limits == [16384, 16384, 16384]
+    assert calls == 6 and not e.scripts and not e.imports
+    assert limits == [16384] * 6
+    assert e.output_recoveries == {"structure_builder": 2}
+    assert e.output_budget() == {"used_tokens": 33, "output_tokens": 33, "reasoning_tokens": 3072}
+
+
+@pytest.mark.asyncio
+async def test_preparation_projection_preserves_signed_provider_exchange():
+    from oaw_atomsculptor.model_recovery import _project_action
+
+    e = setup()
+    await activate(e)
+    req = request()
+    req.config.system_instruction = "Existing provider instruction"
+    req.contents = [types.Content(role="model", parts=[types.Part(
+        thought_signature=b"signature", function_call=types.FunctionCall(id="native", name="inspect_sandbox"))])]
+    prepare(e, req)
+    projected = _project_action(req, e, "structure_builder", SimpleNamespace(types=types), recovering_output=False)
+    assert projected.contents == req.contents
+    assert projected.config.system_instruction == req.config.system_instruction
+    assert declarations(projected) == {"inspect_sandbox", "finish_task"}
 
 
 @pytest.mark.asyncio
@@ -371,7 +431,7 @@ async def test_recovered_output_ceiling_preserves_lower_limits_and_other_roles()
     e = setup(limits=HarnessLimits(recovered_action_output_tokens=3072))
     await activate(e)
     await tool(e, "start_sandbox", {"sandbox": "box"}, {"state": "ready"})
-    e.output_recoveries["structure_builder"] = 1
+    assert e.claim_output_recovery("structure_builder")
     req = request(); prepare(e, req)
     assert req.config.max_output_tokens == 3072
     req = request(); req.config.max_output_tokens = 1536; prepare(e, req)
@@ -380,7 +440,7 @@ async def test_recovered_output_ceiling_preserves_lower_limits_and_other_roles()
         req = request(); e.before_model(role, req, SimpleNamespace(types=types), 16384)
         assert req.config.max_output_tokens == 16384
     direct = RunEvidence(_ModelTrace(asyncio.Queue()), REQUEST, direct_builder=True)
-    direct.output_recoveries["structure_builder"] = 1
+    assert direct.claim_output_recovery("structure_builder")
     req = request(); prepare(direct, req)
     assert req.config.max_output_tokens == 16384
 

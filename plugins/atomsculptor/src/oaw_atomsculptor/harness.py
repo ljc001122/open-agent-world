@@ -126,7 +126,9 @@ class RunEvidence:
         self.script_sources = {}
         self.current_script_key = None
         self.output_tokens = 0
+        self.reasoning_tokens = None
         self.output_recoveries: dict[str, int] = {}
+        self._output_recovery_keys = set()
         self.workflow = ModellingWorkflow(original_request, direct=direct_builder)
         self.actions = ExecutionActions()
         from .execution_steps import ExecutionSteps
@@ -328,6 +330,24 @@ class RunEvidence:
             "unknown_imports": deepcopy(checkpoint.get("unknown_imports", {})),
             "policy": "Historical evidence only. Read saved files/results before reuse; validate current files and read back current document revisions. Never replay unresolved effects."}
         experiment = self.continuation["current_experiment"]
+        measured = (checkpoint.get("current_experiment") or {}).get("measurements")
+        if experiment.get("command_id") and isinstance(measured, dict):
+            summary = self._project_measurements(measured)
+            from .measurements import constraint_failures
+            failed = constraint_failures(measured)
+            experiment["historical_measurements"] = {
+                "source_run_id": source_run_id,
+                "scope": "Prior command's reported measurements. Current file validity and acceptance are separate.",
+                **{key: summary[key] for key in ("kind", "objective", "values", "saved_data_keys", "saved_metadata_keys",
+                    "assumption_invalid", "contradiction") if key in summary},
+                "failed_checks": [{key: row[key] for key in ("name", "check_ids", "passed", "reason") if key in row}
+                                  for row in failed],
+            }
+        input_check = (checkpoint.get("execution_steps") or {}).get("pending_input_check")
+        if isinstance(input_check, Mapping):
+            self.continuation["input_check"] = {**deepcopy(input_check),
+                "result_reference": _command_result_reference(input_check.get("sandbox"), input_check.get("operation_id"))}
+        experiment = self.continuation["current_experiment"]
         if experiment.get("command_id") and experiment.get("sandbox"):
             experiment["result_reference"] = _command_result_reference(experiment["sandbox"], experiment["command_id"])
         prior = checkpoint.get("continuation_evidence") or {}
@@ -502,8 +522,11 @@ class RunEvidence:
         measured = self.measurement_reports.get(sequence)
         if measured is None:
             return None
-        # Keep all verdicts and population counts; large ordinary data remains
-        # in the native invocation and produced artifacts, not repeated frames.
+        return {**self._project_measurements(measured), "native_measurement_reference": self.measurement_reference(sequence)}
+
+    @staticmethod
+    def _project_measurements(measured):
+        # Keep verdicts and scalar facts; arrays remain available in the native record.
         result = {k: deepcopy(measured[k]) for k in ("kind", "measurement_revision", "objective", "coverage",
                   "constraints", "assumption_invalid", "contradiction") if k in measured}
         values = measured.get("values", measured.get("measurements", {}))
@@ -514,7 +537,6 @@ class RunEvidence:
             v is None or type(v) in {str, int, float, bool} or
             isinstance(v, list) and len(v) <= 8 and all(x is None or type(x) in {str, int, float, bool} for x in v)}
         result["saved_metadata_keys"] = [k for k in metadata if k not in result["metadata"]]
-        result["native_measurement_reference"] = self.measurement_reference(sequence)
         return result
 
     def measurement_reference(self, sequence):
@@ -652,7 +674,29 @@ class RunEvidence:
             "source": "native measurement records and Planner reviews, not reconstructed reasoning"}
 
     def output_budget(self):
-        return {"used_tokens": self.output_tokens}
+        return {"used_tokens": self.output_tokens, "output_tokens": self.output_tokens,
+                "reasoning_tokens": self.reasoning_tokens}
+
+    def _output_recovery_key(self, role):
+        if not self.actions.enabled(self, role):
+            return (role,)
+        if self.actions.preparation_tool:
+            return (role, "sandbox_preparation")
+        # Refining a target, reading results or redelegating cannot create a
+        # new allowance. A finished native experiment, new Skill output or
+        # completed checkpoint can.
+        return (role, self.workflow.current, self.execution_sequence, len(self.artifact_handoffs))
+
+    def output_recovery_used(self, role):
+        return self._output_recovery_key(role) in self._output_recovery_keys
+
+    def claim_output_recovery(self, role):
+        key = self._output_recovery_key(role)
+        if key in self._output_recovery_keys:
+            return False
+        self._output_recovery_keys.add(key)
+        self.output_recoveries[role] = self.output_recoveries.get(role, 0) + 1
+        return True
 
     def time_budget(self):
         script_timeout = {"default_script_timeout_seconds": self.limits.script_execution_seconds,
@@ -973,7 +1017,7 @@ class RunEvidence:
                 excerpt = "".join(lines[start:start + 24])[:2400]
         result = {"sandbox": key[0], "path": key[1], "version": item.version,
                 "source_chars": len(source), "source_head": source[:limit],
-                "reader": {"tool": "read_modelling_source", "paging": "offset/limit in characters; or start_line/end_line, literal query, Python symbol. Returns raw text with line positions and version."},
+                "reader": {"tool": "read_modelling_source", "paging": "offset/limit in characters; or start_line/end_line, source query, Python symbol. Returns raw text with line positions and version."},
                 "error_line": error_line, "excerpt_start_line": start + 1}
         reference = self._source_reference_cache.get(key)
         if reference and reference["version"] == item.version:
@@ -995,11 +1039,17 @@ class RunEvidence:
     def after_model(self, response: Any) -> None:
         if getattr(response, "partial", False):
             return
-        count = getattr(getattr(response, "usage_metadata", None), "candidates_token_count", None)
-        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+        usage = getattr(response, "usage_metadata", None)
+        count = getattr(usage, "candidates_token_count", None)
+        if type(count) is int and count > 0:
             self.output_tokens += count
+        reasoning = getattr(usage, "thoughts_token_count", None)
+        if type(reasoning) is int and reasoning >= 0:
+            self.reasoning_tokens = (self.reasoning_tokens or 0) + reasoning
 
     def tool_callbacks(self, role: str) -> dict[str, Any]:
+        normalized_calls = {}
+
         async def before_tool(tool: Any, args: Any, tool_context: Any):
             if not isinstance(args, Mapping):
                 return None
@@ -1023,21 +1073,28 @@ class RunEvidence:
                 return rejected_arguments
             if name in {"read_tool_result", "read_modelling_source"}:
                 return None  # Scoped native reader validates Run/role/reference.
+            from .execution_steps import STEP_TOOL_MODES, normalize_step_arguments
+            actual_name = getattr(tool, "name", "")
+            normalized = normalize_step_arguments(actual_name, args)
             blocked = self.workflow.before_tool(role, name, args, self)
             if blocked is not None:
+                if normalized:
+                    blocked["normalized_arguments"] = {"ignored_fields": normalized}
                 self.steps.retain_target_rejection(self, getattr(tool, "name", name), args, blocked)
                 self.record_rejection(role, name, args, blocked)
                 return blocked
-            from .execution_steps import STEP_TOOL_MODES, argument_error
-            actual_name = getattr(tool, "name", "")
             if actual_name in STEP_TOOL_MODES:
-                from .execution_steps import fill_step_fields
+                from .execution_steps import argument_error, fill_step_fields
                 fill_step_fields(self, args)
                 rejected = argument_error(actual_name, args)
                 if rejected:
+                    if normalized:
+                        rejected["normalized_arguments"] = {"ignored_fields": normalized}
                     self.steps.retain_target_rejection(self, actual_name, args, rejected)
                     self.record_rejection(role, actual_name, args, rejected)
                     return rejected
+                if normalized:
+                    normalized_calls[getattr(tool_context, "function_call_id", None)] = normalized
                 self.steps.argument_issue = None
                 self.steps.argument_failures = 0
             if name == "finish_task" and isinstance(args.get("result"), Mapping):
@@ -1145,6 +1202,9 @@ class RunEvidence:
         async def after_tool(tool: Any, args: Any, tool_context: Any, tool_response: Any):
             if not isinstance(args, Mapping):
                 return None
+            normalized = normalized_calls.pop(getattr(tool_context, "function_call_id", None), None)
+            if normalized and isinstance(tool_response, dict):
+                tool_response["normalized_arguments"] = {"ignored_fields": normalized}
             name = self.semantic_tool(getattr(tool, "name", ""))
             if name == "finish_task":
                 previous_revision = self.workflow.plan_revision

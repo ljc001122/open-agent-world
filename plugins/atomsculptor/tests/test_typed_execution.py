@@ -112,6 +112,26 @@ async def test_missing_payload_correction_then_real_patch_and_saved_search():
 
 
 @pytest.mark.asyncio
+async def test_step_variants_normalize_only_unambiguous_fields_before_native_dispatch():
+    e, files, calls, invoke = await native_sdk_fixture()
+    assert (await invoke("run_modelling_step", dict(COMMON, source="print(1)")))["ok"]
+    args = dict(COMMON, source="print(2)", previous_assessment=prior(e))
+    conflict = await invoke("rewrite_modelling_step", {**args, "edits": [{"old": "1", "new": "3"}]})
+    assert conflict["error"]["remove_fields"] == ["edits"]
+    assert not e.steps.target_recovery(e)
+    assert len(calls) == 2 and files["probe.py"] == "print(1)"
+    rewrite = await invoke("rewrite_modelling_step", {**args, "edits": []})
+    assert rewrite["ok"] and rewrite["normalized_arguments"]["ignored_fields"] == ["edits"]
+    patch_args = dict(COMMON, edits=[{"old": "2", "new": "4"}], previous_assessment=prior(e))
+    conflict = await invoke("patch_modelling_step", {**patch_args, "source": "print(5)"})
+    assert conflict["error"]["remove_fields"] == ["source"] and not e.steps.target_recovery(e)
+    assert len(calls) == 4 and files["probe.py"] == "print(2)"
+    patched = await invoke("patch_modelling_step", {**patch_args, "rewrite_reason": "Old annotation"})
+    assert patched["ok"] and patched["normalized_arguments"]["ignored_fields"] == ["rewrite_reason"]
+    assert len(calls) == 6 and files["probe.py"] == "print(4)"
+
+
+@pytest.mark.asyncio
 async def test_finished_step_inherits_full_fields_and_schema_matches_actual_patch_dispatch():
     from oaw_atomsculptor.execution_steps import step_field_defaults
     e, files, calls, invoke = await native_sdk_fixture()

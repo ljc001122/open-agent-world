@@ -106,7 +106,13 @@ async def test_truncated_reasoning_recovers_inside_task_without_replaying_tools(
     returns = [e.payload for e in events if e.payload.get("elapsed_ms") is not None and e.payload.get("phase") == "model"]
     assert len(returns) == builder_turns + root_turns
     assert sum(r["output_tokens"] for r in returns) == (2048 + 7 + root_turns * 7 if fails_again else 1024 + 14 + root_turns * 7)
-    assert len([e for e in events if e.payload.get("recovery_event") == "model_output_recovery"]) == 1
+    recovery, = [e.payload for e in events if e.payload.get("recovery_event") == "model_output_recovery"]
+    assert recovery["response_disposition"] == "discarded_output_limit"
+    assert recovery["source_model_attempt"] == 1
+    by_request = {row["model_request"]: row for row in returns}
+    assert by_request[recovery["source_model_request"]]["finish_reason"] == "MAX_TOKENS"
+    assert by_request[recovery["recovery_model_request"]]["role"] == recovery["role"]
+    assert recovery["source_model_request"] < recovery["recovery_model_request"]
     assert runtime.active == {}
 
 

@@ -54,6 +54,8 @@ def _skill(folder) -> Skill:
            and "from oaw_runtime import" in asset for path, asset in contents.items()):
         # One maintained source; each materialized Skill remains standalone.
         contents["scripts/oaw_runtime.py"] = files(__package__).joinpath("skill_cli.py").read_text(encoding="utf-8")
+    if any(isinstance(asset, str) and "from structure_versions import" in asset for asset in contents.values()):
+        contents["scripts/structure_versions.py"] = files(__package__).joinpath("structure_versions.py").read_text(encoding="utf-8")
     if folder.name == "structure-inspect":
         from .measurements import measurement_contract
         contents["references/measurement-contract.json"] = json.dumps(
@@ -74,7 +76,7 @@ def atomsculptor_skills() -> SkillPackage:
     root = files(__package__).joinpath("skills")
     return SkillPackage(
         package_id="atomsculptor.skills",
-        version="0.1.15",
+        version="0.1.16",
         name="AtomSculptor Skills",
         description="Portable atomistic modelling, inspection, conversion, and Materials Project skills.",
         author="AtomSculptor",

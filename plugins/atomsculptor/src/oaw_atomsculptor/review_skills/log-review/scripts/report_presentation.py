@@ -69,11 +69,14 @@ def story_html(entries):
             body = '<div class="figure-grid' + (' multiple' if len(entry['structures']) > 1 else '') + '">'
             for number, item in enumerate(entry['structures'], 1):
                 label = marker + (f'.{number}' if len(entry['structures']) > 1 else '')
+                if item['provenance'] == 'missing':
+                    body += '<p class="version-gap">历史版本缺失 · ' + file_link('records.html', '查看记录') + '</p>'
+                    continue
                 body += '<figure>'
                 if item.get('preview'):
-                    body += '<a class="structure-image" href="' + quote(item['preview']) + '"><img src="' + quote(item['preview']) + '" alt="' + escape(structure_caption(item), quote=True) + ' · 保存文件预览"></a>'
+                    body += '<a class="structure-image" href="' + quote(item.get('copied_file') or item['preview']) + '"><img src="' + quote(item['preview']) + '" alt="' + escape(structure_caption(item), quote=True) + ' · 保存文件预览"></a>'
                 else:
-                    body += '<div class="preview-missing"><span>—</span><p>' + ('历史结构版本缺失' if item.get('provenance') == 'missing' else '文件预览不可用') + '</p></div>'
+                    body += '<div class="preview-missing"><span>—</span><p>文件预览不可用</p></div>'
                 body += '<figcaption>' + (file_link(item['copied_file'], '结构 ' + label) if item.get('copied_file') else escape('结构 ' + label))
                 body += ' · ' + escape(PROVENANCE[item['provenance']]) + '</figcaption></figure>'
             body += '</div>'
@@ -116,12 +119,14 @@ def flowchart(entries, image_root=None):
     for index, entry in enumerate(entries):
         parts.append('<g><title>' + escape(entry['title']) + '</title>')
         if entry['kind'] == 'structure':
-            items = entry.get('structures', [])
+            all_items = entry.get('structures', [])
+            items = [item for item in all_items if item['provenance'] != 'missing']
+            missing = len(all_items) - len(items)
             columns = min(2, max(1, len(items)))
             width = 800 / columns
             image_height = 300 if columns == 1 else 240
             tile_height = image_height + 40
-            height = max(1, (len(items)+columns-1)//columns)*tile_height
+            height = ((len(items)+columns-1)//columns)*tile_height
             for number, item in enumerate(items):
                 left = 50 + number % columns * width
                 top = y + number // columns * tile_height
@@ -139,9 +144,12 @@ def flowchart(entries, image_root=None):
                     image_x, image_y = left+(width-fitted_width)/2, top+(image_height-fitted_height)/2
                     parts.append(f'<image href="{href}" x="{image_x}" y="{image_y}" width="{fitted_width}" height="{fitted_height}" preserveAspectRatio="xMidYMid meet"/>')
                 else:
-                    text_lines(['历史版本缺失' if item['provenance'] == 'missing' else '文件预览不可用'], left+24, top+image_height/2, 15, '#6a7c86')
+                    text_lines(['文件预览不可用'], left+24, top+image_height/2, 15, '#6a7c86')
                 label = entry['title'] + (f'.{number+1}' if len(items) > 1 else '')
                 text_lines(wrapped(label+' · '+PROVENANCE[item['provenance']], int((width-24)/7), 1), left+12, top+image_height+22, 13, '#6a7c86')
+            if missing:
+                text_lines([f'历史版本缺失（{missing}）'], 72, y+height+20, 14, '#6a7c86')
+                height += 34
         else:
             summary = wrapped('思考：'+decision_text(entry), 92, 2)
             operation = wrapped('操作：'+operation_text(entry), 92, 2)

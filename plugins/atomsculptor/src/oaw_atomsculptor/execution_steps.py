@@ -12,6 +12,7 @@ import posixpath
 from collections.abc import Mapping
 from copy import deepcopy
 from types import SimpleNamespace
+import re
 
 from open_agent_world.plugin_api.tool_execution import execute_tool, tool_payload as _payload
 from open_agent_world.plugin_api.sandbox import TEXT_EDITS_SCHEMA
@@ -108,13 +109,13 @@ STEP_TOOL_MODES = {"run_modelling_step": "new", "patch_modelling_step": "patch",
 TARGET_RECOVERY_SCHEMA = {"type": "object", "properties": {
     "subtask_id": {"type": "string", "description": "Copy the current target recovery subtask_id."},
     "script_path": {"type": "string", "description": "The single literal .py target. Use expected_script_path to correct the submitted action, or explicitly correct an unexecuted LOCAL subtask target."},
-    "reason": {"type": "string", "minLength": 1, "description": "Explain only the rejected execution-field correction; code and scientific checks stay unchanged."},
+    "reason": {"type": "string", "minLength": 1, "description": "Optional note on the execution-field correction."},
     "corrections": {"type": "object", "properties": {
         key: {"anyOf": [deepcopy(STEP_SCHEMA["properties"][key]), {"type": "null"}]} for key in
         ("argv", "input_artifacts", "input_manifest_path", "timeout_seconds", "previous_assessment")},
         "additionalProperties": False, "description":
         "Optional corrected execution fields. Omit unchanged fields; null clears an optional field. Replacements pass all native checks."}},
-    "required": ["subtask_id", "script_path", "reason"], "additionalProperties": False}
+    "required": ["subtask_id", "script_path"], "additionalProperties": False}
 
 
 def step_tool_schema(name):
@@ -138,6 +139,17 @@ def step_tool_schema(name):
     if mode != "rewrite":
         schema["properties"].pop("rewrite_reason")
     return schema
+
+
+def normalize_step_arguments(name, args):
+    """Remove only unused fields whose removal cannot change the action."""
+    if name == "rewrite_modelling_step" and type(args.get("edits")) is list and not args["edits"]:
+        args.pop("edits")
+        return ["edits"]
+    if name == "patch_modelling_step" and isinstance(args.get("rewrite_reason"), str):
+        args.pop("rewrite_reason")
+        return ["rewrite_reason"]
+    return []
 
 
 def argument_error(name, args, schema=None):
@@ -170,16 +182,25 @@ def argument_error(name, args, schema=None):
             invalid.append(key)
     fields = missing + unexpected + invalid
     if fields:
+        assessment_locations = {key: "previous_assessment." + key for key in unexpected
+                                if name in STEP_TOOL_MODES and key in ASSESSMENT_SCHEMA["properties"]}
+        remove = [key for key in unexpected if key not in assessment_locations]
+        instructions = []
+        if missing:
+            instructions.append("Supply " + ", ".join(missing) + ".")
+        if invalid:
+            instructions.append("Correct " + ", ".join(sorted(set(invalid))) + ".")
+        if remove:
+            instructions.append("Remove " + ", ".join(remove) + ".")
+        if assessment_locations:
+            instructions.append("Move " + ", ".join(assessment_locations) + " into previous_assessment.")
         return {"ok": False, "error": {"code": "step_arguments", "kind": "argument_validation",
             "command_dispatched": False,
             "fields": sorted(set(fields)), "required_fields": schema["required"], "retry_tool": name,
             "missing_fields": missing, "unexpected_fields": unexpected, "invalid_fields": sorted(set(invalid)),
-            "assessment_field_locations": {key: "previous_assessment." + key for key in unexpected
-                                           if name in STEP_TOOL_MODES and key in ASSESSMENT_SCHEMA["properties"]},
-            "message": "No script was saved or executed. Add missing fields, correct invalid values and REMOVE unexpected top-level fields. "
-                       "Assessment fields belong inside previous_assessment when assessing the preceding execution; "
-                       "a standalone stage decision uses advance_modelling_stage. Correct only the tool payload; "
-                       "keep the unexecuted source/edits and scientific plan unchanged. Reasoning text is not a submitted payload."}}
+            "assessment_field_locations": assessment_locations, "remove_fields": remove,
+            "message": "No script was saved or executed. " + " ".join(instructions) +
+                       " Keep the intended code and scientific plan unchanged."}}
     return None
 
 
@@ -228,6 +249,7 @@ class ExecutionSteps:
         self._target_rejection = None
         self.input_rejections = {}
         self.input_blocker = None
+        self._input_check = None
         self.helper_module = None
         self.guard_path = None
 
@@ -242,7 +264,7 @@ class ExecutionSteps:
             return None
         from inspect import signature
         from . import modelling_io
-        helpers = ("load_inputs", "constraint", "artifact", "emit_measurements", "write_extxyz",
+        helpers = ("load_inputs", "constraint", "artifact", "emit_measurements", "write_extxyz", "write_structure",
                    "transform_points", "relax_structure")
         return {"module": self.helper_module,
                 "availability": "Staged beside the script by a native Sandbox write before the first modelling step in each Sandbox/script directory.",
@@ -253,6 +275,7 @@ class ExecutionSteps:
                 "returns": {"load_inputs": "HostInputs; receipt(path) includes saved units/frame/components/layout.",
                             "constraint": "One check record; controls belong here.", "artifact": "One artifact receipt.",
                             "emit_measurements": "Prints JSON with the oaw_measurements key; does not execute a calculation or change failed checks.",
+                            "write_structure": "ASE writer for other formats; each saved file is retained in the native command history.",
                             "write_extxyz": "{path, atom_count, layout, round_trip: true, independent_validation: false}; pass receipt['layout'] to artifact(..., layout=...). Raises if round-trip changes geometry or arrays.",
                             "transform_points": "Coordinates in target_frame with the same declared frame.reference.",
                             "relax_structure": "(atoms_copy, report); caller supplies calculator and finite convergence settings."},
@@ -271,6 +294,15 @@ class ExecutionSteps:
                         if k in a} != a for a in blocker["input_identity"])):
             self.input_blocker = blocker = None
         return blocker
+
+    def pending_input_check(self):
+        check = self._input_check
+        if check is None:
+            return None
+        record = check["record"]
+        return {key: record[key] for key in ("subtask_id", "sandbox", "script_path", "stage", "plan_revision")} | {
+            "operation_id": check["operation_id"], "state": record["state"],
+            "submitted_changes_saved": False, "command_dispatched": False}
 
     def target_recovery(self, evidence):
         retained = self._target_rejection
@@ -305,6 +337,9 @@ class ExecutionSteps:
                 or name not in STEP_TOOL_MODES):
             return
         properties = step_tool_schema(name)["properties"]
+        # Resuming a retained action must never implicitly discard competing code.
+        if any(key in args and key not in properties for key in ("source", "edits")):
+            return
         values = {k: deepcopy(v) for k, v in args.items() if k in properties}
         invalid = argument_error(name, values)
         if invalid and set(invalid["error"]["fields"]) - {"script_path", *TARGET_RECOVERY_SCHEMA["properties"]["corrections"]["properties"]}:
@@ -329,24 +364,33 @@ class ExecutionSteps:
         recovery = self.target_recovery(evidence)
         if recovery:
             rejected["error"]["recovery"] = {**recovery, "next_action":
-                "Call resume_modelling_step with these IDs, script_path, reason and only the required corrections. "
+                "Call resume_modelling_step with these IDs, script_path and only the required corrections. "
                 "The host retains the rejected code; omit source and do not generate another program."}
 
     async def resume(self, evidence, definitions, invoke, stopped, *, call_id, subtask_id,
-                     script_path, reason, corrections=None):
+                     script_path, reason=None, corrections=None):
         def error(code, message):
             return {"ok": False, "error": {"code": code, "message": message,
                                            "kind": "step_contract", "command_dispatched": False}}
         if stopped.is_set():
             from open_agent_world.plugin_api import AgentRuntimeError
             raise AgentRuntimeError("AtomSculptor Run was stopped")
+        if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+            return error("target_recovery_fields", "Omit reason or provide a nonempty note.")
+        if pending := self.pending_input_check():
+            if (not pending["operation_id"] or subtask_id != pending["subtask_id"]
+                    or script_path != pending["script_path"] or corrections):
+                return error("input_check_resume", "Use the retained input check's subtask_id and script_path "
+                             "with no corrections. Modelling has not been dispatched.")
+            return await self.run(evidence, definitions, invoke, stopped, call_id=call_id,
+                                  _resume_input=True, **self._input_check["arguments"])
         recovery = self.target_recovery(evidence)
         if not recovery or subtask_id != recovery["subtask_id"]:
             return error("target_recovery_stale", "Use the current retained action and subtask IDs; no command was dispatched.")
         if self.active or evidence.pending or evidence.executions or evidence.inline_pending or evidence.skill_operations:
             return error("step_in_progress", "Collect native execution receipts before correcting a target; never replay unknown work.")
-        if not script_target(script_path) or not isinstance(reason, str) or not reason.strip():
-            return error("target_recovery_fields", "Supply one literal relative .py target and explain only the rejected execution-field correction.")
+        if not script_target(script_path):
+            return error("target_recovery_fields", "Supply one literal relative .py target.")
         if corrections is not None and (not isinstance(corrections, Mapping) or set(corrections) -
                 set(TARGET_RECOVERY_SCHEMA["properties"]["corrections"]["properties"])):
             return error("target_recovery_fields", "Correct only declared execution/previous_assessment fields; code and checks are immutable.")
@@ -379,6 +423,7 @@ class ExecutionSteps:
                         for path, owned in r.get("host_input_files", {}).items()
                         if self.helper_module and posixpath.basename(path) == self.helper_module + ".py"}.items()],
                 "input_blocker": deepcopy(self.input_blocker),
+                "pending_input_check": self.pending_input_check(),
                 "target_recovery": ({"subtask_id": self._target_rejection["contract"]["subtask_id"],
                     "expected_script_path": self._target_rejection["contract"]["artifact"],
                     "actual_script_path": self._target_rejection["arguments"].get("script_path"),
@@ -389,13 +434,25 @@ class ExecutionSteps:
     async def run(self, evidence, definitions, invoke, stopped, *, call_id, sandbox,
                   script_path, source, question=None, expected_output=None, stop_condition=None, timeout_seconds=None,
                   previous_assessment=None, edits=None, execution_scope="sample", argv=None,
-                  rewrite=False, action_mode="", input_artifacts=None, input_manifest_path=None, repeat_purpose=None, rewrite_reason=None):
+                  rewrite=False, action_mode="", input_artifacts=None, input_manifest_path=None, repeat_purpose=None,
+                  rewrite_reason=None, _resume_input=False):
         def error(code, message, **details):
             return {"ok": False, "error": {"code": code, "message": message,
                 "kind": "step_contract", "command_dispatched": False, **details}}
 
         if self.active or evidence.pending or evidence.executions or evidence.inline_pending or evidence.skill_operations:
             return error("step_in_progress", "Collect the active execution step before starting another.")
+        pending_input = self._input_check
+        if pending_input and not _resume_input:
+            return error("step_in_progress", "Resolve the retained native input check before starting another step.",
+                         input_check=self.pending_input_check())
+        if _resume_input and (not pending_input
+                or pending_input["record"]["stage"] != evidence.workflow.current
+                or pending_input["record"]["plan_revision"] != evidence.workflow.plan_revision
+                or pending_input["pending_experiment"] != evidence.workflow.pending_experiment
+                or pending_input["execution_sequence"] != evidence.execution_sequence):
+            return error("input_check_stale", "The plan or execution changed while collecting the input check. "
+                         "The retained step was not dispatched.")
         if not evidence.workflow.active or evidence.workflow.current not in {"probe", "build"}:
             return error("step_phase", "Use this tool only for the current probe/build experiment.")
         fields = {"script_path": script_path, "question": question,
@@ -552,6 +609,10 @@ class ExecutionSteps:
                 "do not recompute retained inputs.", required_input_paths=planned["input_paths"])
         identity = json.dumps([sandbox, key[1], version, list(argv or []), input_identity,
             evidence.environment_revisions.get(sandbox, 0)], sort_keys=True, ensure_ascii=False)
+        if pending_input and (identity != pending_input["identity"]
+                              or inputs != pending_input["record"]["input_artifacts"]):
+            return error("input_check_stale", "The retained step's source version, inputs or environment changed. "
+                         "Its earlier input check cannot authorize modelling.")
         guard_identity = json.dumps([sandbox, input_identity,
             evidence.environment_revisions.get(sandbox, 0)], sort_keys=True, ensure_ascii=False)
         self.input_blocker = None
@@ -573,7 +634,8 @@ class ExecutionSteps:
         self.argument_issue = None
         self.argument_failures = 0
         self._target_rejection = None
-        record = {"question": question, "expected_output": expected_output, "stop_condition": stop_condition,
+        record = pending_input["record"] if pending_input else {
+                  "question": question, "expected_output": expected_output, "stop_condition": stop_condition,
                   "sandbox": sandbox, "script_path": posixpath.normpath(script_path),
                   "source_version": version, "execution_scope": execution_scope, "action_mode": mode,
                   "plan_revision": evidence.workflow.plan_revision, "stage": evidence.workflow.current,
@@ -586,7 +648,8 @@ class ExecutionSteps:
                   "semantic_argv": list(argv or []), "repeat_purpose": repeat_purpose,
                   "rewrite_reason": rewrite_reason,
                   "state": "started"}
-        self.records.append(record)
+        if not pending_input:
+            self.records.append(record)
 
         async def operation(name, args):
             if stopped.is_set():
@@ -613,10 +676,13 @@ class ExecutionSteps:
             if inputs or self.helper_module:
                 # Invoke existing authorized operations without recording the
                 # host read-only guard as a model-produced experiment.
-                async def native(name, args):
+                async def invoke_input(capability, args):
                     if stopped.is_set():
                         raise asyncio.CancelledError()
-                    return (await execute_tool(lambda: invoke(operations[name].capability_id, args))).response
+                    return (await execute_tool(lambda: invoke(capability, args))).response
+
+                async def native(name, args):
+                    return await invoke_input(operations[name].capability_id, args)
                 from uuid import uuid4
                 if self.guard_path is None:
                     self.guard_path = ".oaw-input-check-" + uuid4().hex + ".py"
@@ -636,12 +702,13 @@ class ExecutionSteps:
                         return error("step_input_save", "Input guard/manifest save was not confirmed; no modelling command ran.", receipt=saved_input)
                     record.setdefault("host_input_files", {})[path] = True
                     return None
-                if self.helper_module:
+                if self.helper_module and not pending_input:
                     from pathlib import Path
                     # Python puts the invoked script's directory on sys.path,
                     # not necessarily its workspace cwd. No source/env rewrite.
                     helper_path = posixpath.join(posixpath.dirname(key[1]), self.helper_module + ".py")
-                    helper_source = Path(__file__).with_name("modelling_io.py").read_text(encoding="utf-8")
+                    helper_source = "\n".join(Path(__file__).with_name(name).read_text(encoding="utf-8")
+                        for name in ("modelling_io.py", "structure_versions.py"))
                     if helper_path not in confirmed:
                         rejected = await save_input(helper_path, helper_source)
                         if rejected:
@@ -649,17 +716,63 @@ class ExecutionSteps:
                     else:
                         record.setdefault("host_input_files", {})[helper_path] = confirmed[helper_path]
             if inputs:
-                rejected = await save_input(guard_path, INPUT_GUARD)
-                if rejected:
-                    return rejected
-                guarded = await native("execute_command", {"sandbox": sandbox,
-                    "argv": ["python3", guard_path, json.dumps(inputs, ensure_ascii=False, sort_keys=True)]})
+                if pending_input:
+                    guarded = pending_input["receipt"]
+                else:
+                    rejected = await save_input(guard_path, INPUT_GUARD)
+                    if rejected:
+                        return rejected
+                    guarded = await native("execute_command", {"sandbox": sandbox,
+                        "argv": ["python3", guard_path, json.dumps(inputs, ensure_ascii=False, sort_keys=True)]})
                 checked = _payload(guarded)
+                operation_id = checked.get("operation_id") if checked.get("status") == "running" else None
+                operation_id = operation_id if isinstance(operation_id, str) and operation_id else None
+                if operation_id:
+                    record["state"] = "input_check_pending"
+                    if not pending_input:
+                        # Keep the proposal in this Run before awaiting. Resume rechecks
+                        # the step contract and waits on this receipt without reapplying its assessment.
+                        self._input_check = {"record": record, "operation_id": operation_id, "receipt": guarded,
+                            "identity": identity, "pending_experiment": deepcopy(evidence.workflow.pending_experiment),
+                            "execution_sequence": evidence.execution_sequence, "arguments": {
+                                "sandbox": sandbox, "script_path": script_path, "source": source,
+                                "question": question, "expected_output": expected_output, "stop_condition": stop_condition,
+                                "timeout_seconds": timeout_seconds, "edits": deepcopy(edits),
+                                "execution_scope": execution_scope, "argv": deepcopy(argv), "action_mode": mode,
+                                "input_artifacts": deepcopy(input_artifacts), "input_manifest_path": input_manifest_path,
+                                "repeat_purpose": repeat_purpose, "rewrite_reason": rewrite_reason}}
+                    from .actions import collect_sandbox_operation
+                    guarded = await collect_sandbox_operation(evidence, operations.get("wait_sandbox_operation"),
+                        invoke_input, guarded, stopped, sandbox=sandbox, workflow_event="modelling_input_check_wait")
+                    checked = _payload(guarded)
+                # The successful payload helper intentionally hides errors. Read
+                # terminal failure metadata separately without treating it as verification.
+                receipt = checked or (guarded if isinstance(guarded, Mapping) else {})
+                receipt_ids = {receipt[key] for key in ("command_id", "operation_id") if isinstance(receipt.get(key), str)}
+                matching = operation_id is None or receipt_ids == {operation_id}
+                problem = receipt.get("error")
+                not_started = (receipt.get("status") != "running" and isinstance(problem, Mapping)
+                               and problem.get("command_dispatched") is False)
+                if matching and (not_started or receipt.get("cancelled") or receipt.get("timed_out")
+                                 or receipt.get("status") in {"failed", "cancelled", "interrupted"}):
+                    self._input_check = None
+                    record["state"] = "input_check_failed"
+                    return error("step_input_check_failed", "The native input check did not complete successfully. "
+                                 "No modelling source was saved or dispatched.", kind="native_dependency",
+                                 input_check=guarded, submitted_changes_saved=False)
+                if operation_id and (not matching or checked.get("status") == "running"
+                                     or type(checked.get("exit_code")) is not int):
+                    return error("step_input_pending", "The input check's terminal receipt is unavailable. "
+                                 "Use resume_modelling_step to collect the same operation and continue the retained step.",
+                                 kind="native_dependency", input_check=guarded, recovery=self.pending_input_check(),
+                                 submitted_changes_saved=False)
                 if type(checked.get("exit_code")) is not int:
                     record["state"] = "input_check_unknown"
-                    evidence.executions[f"{call_id}:input_check_unknown"] = []
-                    return error("step_input_unknown", "Collect the native input check before retrying; no modelling command ran.",
-                                 kind="execution_unknown", command_dispatched=None, input_check=guarded)
+                    self._input_check = {"record": record, "operation_id": None}
+                    return error("step_input_unknown", "No native input check receipt or operation ID was confirmed. "
+                                 "Inspect the Sandbox. No modelling source was saved or dispatched.",
+                                 kind="native_dependency", input_check=guarded, submitted_changes_saved=False)
+                self._input_check = None
                 try:
                     guard_report = json.loads(checked.get("stdout", ""))
                     matched = guard_report.get("oaw_inputs_verified") == inputs
@@ -819,14 +932,32 @@ def source_reader_function(evidence):
     def error(code, message, **details):
         return {"ok": False, "error": {"code": code, "message": message, **details}}
 
+    def source_symbols(source):
+        import ast
+
+        tree = ast.parse(source)
+        symbols = []
+
+        def visit(node, prefix=""):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = prefix + node.name
+                symbols.append((name, node))
+                prefix = name + "."
+            for child in ast.iter_child_nodes(node):
+                visit(child, prefix)
+
+        visit(tree)
+        return symbols
+
     async def read_modelling_source(sandbox: str, script_path: str,
                                     offset: int = 0, limit: int = 4000,
                                     start_line: int | None = None, end_line: int | None = None,
                                     query: str | None = None, symbol: str | None = None) -> dict:
         """Read current native-confirmed code without executing it.
 
-        Choose character offset, 1-based start_line/end_line, a literal query,
-        or an exact Python symbol (e.g. Class.method). limit always bounds text
+        Choose character offset, 1-based start_line/end_line, a source query,
+        or an exact Python symbol (e.g. Class.method). Queries prefer a literal
+        match, then allow horizontal whitespace differences. limit bounds text
         to 1..8000 characters. Returned text is raw source suitable for edits;
         positions and version are metadata. Continue a page with next_offset
         and omit the selector. Prefer locating the needed region to rereading
@@ -854,7 +985,6 @@ def source_reader_function(evidence):
         selectors = sum(x is not None for x in (start_line, query, symbol))
         if selectors > 1 or selectors and offset != 0 or end_line is not None and start_line is None:
             return error("source_selector", "Choose offset OR start_line[/end_line] OR query OR symbol. Continue with next_offset only.")
-        import ast
         from bisect import bisect_right
         starts = [0] + [i + 1 for i, ch in enumerate(source) if ch == "\n" and i + 1 < len(source)]
         selected_end, details = len(source), {}
@@ -866,7 +996,7 @@ def source_reader_function(evidence):
             if end_line is not None and end_line < len(starts):
                 selected_end = starts[end_line]
         elif query is not None:
-            if not isinstance(query, str) or not query or len(query) > 256:
+            if not isinstance(query, str) or not query.strip() or len(query) > 256:
                 return error("source_query", "Use a nonempty literal query of at most 256 characters.")
             positions, cursor = [], 0
             # Bounded locations, not an unbounded result or a second index.
@@ -876,28 +1006,47 @@ def source_reader_function(evidence):
                     break
                 positions.append(found)
                 cursor = found + len(query)
+            match_kind = "literal"
+            if not positions and "\n" not in query and "\r" not in query:
+                from itertools import islice
+
+                tokens = re.findall(r"\w+|[^\w\s]", query)
+                pattern = r"(?<!\w)" if tokens[0][0].isalnum() or tokens[0][0] == "_" else ""
+                for index, token in enumerate(tokens):
+                    if index:
+                        between_words = bool(re.fullmatch(r"\w+", tokens[index - 1]) and re.fullmatch(r"\w+", token))
+                        pattern += r"[ \t]+" if between_words else r"[ \t]*"
+                    pattern += re.escape(token)
+                if re.fullmatch(r"\w+", tokens[-1]):
+                    pattern += r"(?!\w)"
+                positions = [m.start() for m in islice(re.finditer(pattern, source), 21)]
+                match_kind = "whitespace"
             if not positions:
-                return error("source_query", "Literal text not found in this snapshot; choose another query or symbol.", version=item.version)
+                from itertools import islice
+
+                hint = {"version": item.version}
+                try:
+                    hint["available_symbols"] = [{"symbol": name, "line": node.lineno}
+                                                 for name, node in source_symbols(source)[:20]]
+                except (SyntaxError, ValueError, RecursionError) as exc:
+                    hint["syntax_error_line"] = getattr(exc, "lineno", None)
+                identifier = re.search(r"[^\W\d]\w*", query)
+                if identifier:
+                    token = identifier.group()
+                    hint["identifier_matches"] = [{"query": token, "line": bisect_right(starts, m.start())}
+                        for m in islice(re.finditer(r"(?<!\w)" + re.escape(token) + r"(?!\w)", source), 6)]
+                return error("source_query", "Query not found. Use a suggested line or symbol to read the exact saved text.", **hint)
             details = {"matches": [{"offset": p, "line": bisect_right(starts, p)} for p in positions[:20]],
-                       "more_matches": len(positions) > 20}
+                       "more_matches": len(positions) > 20, "match_kind": match_kind}
             offset = starts[max(0, bisect_right(starts, positions[0]) - 3)]
         elif symbol is not None:
             if not isinstance(symbol, str) or not symbol or len(symbol) > 256:
                 return error("source_symbol", "Use an exact Python function or class name, optionally qualified as Class.method.")
             try:
-                tree = ast.parse(source)
+                symbols = source_symbols(source)
             except (SyntaxError, ValueError, RecursionError) as exc:
                 return error("source_symbol", "This snapshot cannot be parsed; locate the error with start_line or a literal query.",
                              line=getattr(exc, "lineno", None), version=item.version)
-            symbols = []
-            def visit(node, prefix=""):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    name = prefix + node.name
-                    symbols.append((name, node))
-                    prefix = name + "."
-                for child in ast.iter_child_nodes(node):
-                    visit(child, prefix)
-            visit(tree)
             matches = [(name, node) for name, node in symbols if name == symbol or node.name == symbol]
             if len(matches) != 1:
                 return error("source_symbol", "Choose one exact, unambiguous symbol from this snapshot.",
@@ -986,12 +1135,13 @@ def typed_step_functions(evidence, definitions, invoke, stopped):
             argv=argv, execution_scope=execution_scope,
             input_artifacts=input_artifacts, input_manifest_path=input_manifest_path, repeat_purpose=repeat_purpose))
 
-    async def resume_modelling_step(subtask_id: str, script_path: str,
-                                   reason: str, tool_context, corrections: dict | None = None) -> dict:
-        """Correct retained execution fields without resending code.
+    async def resume_modelling_step(subtask_id: str, script_path: str, tool_context,
+                                   reason: str | None = None, corrections: dict | None = None) -> dict:
+        """Continue a retained input check or correct execution fields without resending code.
 
-        Use subtask_id, script_path, reason and optional corrections only; the
-        retained action supplies sandbox. Put an assessment correction inside
+        Use subtask_id, script_path and only needed corrections; reason is optional. The
+        retained action supplies sandbox. For an input check, use the unchanged
+        IDs and omit corrections. Put an assessment correction inside
         corrections.previous_assessment, not at the top level.
         """
         return await evidence.steps.resume(evidence, definitions, invoke, stopped,

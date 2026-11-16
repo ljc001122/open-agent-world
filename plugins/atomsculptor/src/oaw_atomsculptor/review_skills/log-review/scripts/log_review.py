@@ -6,7 +6,7 @@ from html import escape
 import csv
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 from urllib.parse import quote
@@ -22,7 +22,7 @@ NATIVE_FILES = ("run.json", "tool calls.json", "model requests.json", "model thi
     "sandbox logs.json", "tool receipts.json", "events.json", "manifest.json", "prompt.txt",
     "conversation messages.json", "conversation logs.txt", "agent logs.txt", "sandbox logs.txt",
     "execution path.md", "execution checkpoint.json", "model checkpoints.json", "experiment.json",
-    "command evidence.json", "record catalog.json", "timeline.jsonl", "run activity.json")
+    "command evidence.json", "record catalog.json", "timeline.jsonl", "run activity.json", "run outputs.json")
 FORMATS = {".extxyz", ".xyz", ".cif", ".vasp", ".poscar", ".pdb", ".traj", ".json"}
 
 
@@ -65,10 +65,27 @@ def load_archive(folder):
         tools = read_json(directory / "tool calls.json", [])
         raw_commands = read_json(directory / "sandbox logs.json", [])
         commands, gaps = resolve_commands(raw_commands, tools)
+        outputs = [item for item in read_json(directory / "run outputs.json", [])
+                   if item.get("run_id") == run["run_id"]]
+        for item in outputs:
+            if item.get("provenance") != "historical":
+                continue
+            path = PurePosixPath(item["path"])
+            version = item["version_id"]
+            if path.parts != ("versions", version, path.name) or ".." in path.parts or "\\" in item["path"]:
+                raise ValueError("Expected a retained file inside its native version directory")
+            inside(directory, item["path"])
+        known = {command["id"] for command in commands}
+        for item in outputs:
+            identity = item["command_id"]
+            if identity not in known:
+                commands.append({"id": identity, "started_at": item.get("started_at"),
+                    "evidence_source": "run outputs.json"})
+                known.add(identity)
         attempts.append({"directory": directory, "run": run,
             "record_availability": {name: (directory / name).is_file() for name in
                 ("tool calls.json", "model requests.json", "sandbox logs.json")},
-            "tools": tools, "command_gaps": gaps,
+            "tools": tools, "command_gaps": gaps, "outputs": outputs,
             "activity": read_json(directory / 'run activity.json', []),
             "models": read_json(directory / "model requests.json", []),
             "commands": commands})
@@ -192,6 +209,8 @@ def validate_manifest(root, attempts, manifest):
     if not isinstance(manifest, dict) or not isinstance(manifest.get("nodes"), list):
         raise ValueError("Manifest requires a nodes array")
     by_run = {a["run"]["run_id"]: a for a in attempts}
+    retained_paths = {(a["run"]["run_id"], item["version_id"], a["directory"] / item["path"])
+        for a in attempts for item in a["outputs"] if item.get("provenance") == "historical"}
     nodes, graph = [], {}
     for index, raw in enumerate(manifest["nodes"]):
         pointer = f"/nodes/{index}"
@@ -242,7 +261,8 @@ def validate_manifest(root, attempts, manifest):
                     raise ValueError("Missing versions cannot substitute a present file")
             else:
                 path = inside(root, item.get("path"))
-                if path.suffix.lower() not in FORMATS and path.name.upper() not in {"POSCAR", "CONTCAR"}:
+                if (path.suffix.lower() not in FORMATS and path.name.upper() not in {"POSCAR", "CONTCAR"}
+                        and (node["run_id"], item.get("version_id"), root / item["path"]) not in retained_paths):
                     raise ValueError("Structure previews require a supported data format; archived programs are not inputs")
         # The inspection and build paths must agree on file classification.
         # A statistics JSON is still useful evidence, but has no atom preview.
@@ -321,7 +341,7 @@ def export_story(output, entries):
     write_json(output / 'trajectory.json', {'schema_version': 1, 'entries': entries,
         'note': 'Recorded order, not inferred causality. Collection snapshots are not preserved historical versions.'})
     fields = ['order', 'kind', 'step', 'operation', 'reasoning_summary', 'summary_basis', 'result',
-        'file', 'preview', 'provenance', 'atom_count', 'elements', 'cell', 'pbc', 'run_id', 'tool_id', 'command_id']
+        'file', 'preview', 'provenance', 'version_id', 'atom_count', 'elements', 'cell', 'pbc', 'run_id', 'tool_id', 'command_id']
     with (output / 'trajectory.csv').open('w', encoding='utf-8-sig', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -331,6 +351,7 @@ def export_story(output, entries):
                 writer.writerow({'order': ordinal, 'kind': entry['kind'], 'operation': entry['title'],
                     **{key: entry.get(key, '') for key in ('step', 'reasoning_summary', 'summary_basis', 'result', 'run_id', 'tool_id', 'command_id')},
                     'file': item.get('copied_file', ''), 'preview': item.get('preview', ''), 'provenance': item.get('provenance', ''),
+                    'version_id': item.get('version_id', ''),
                     'atom_count': saved.get('atom_count', ''), **{key: json.dumps(saved[key], ensure_ascii=False) if key in saved else '' for key in ('elements', 'cell', 'pbc')}})
 
 def link(path, label):
@@ -477,8 +498,16 @@ def build_review(folder: str, manifest_file: str = "", output_folder: str = "rev
             source = attempt["directory"] / name
             if source.is_file():
                 shutil.copy2(source, target / name)
+        for item in attempt["outputs"]:
+            if item.get("provenance") == "historical":
+                source = inside(attempt["directory"], item["path"])
+                if source.is_file():
+                    copied = target / item["path"]
+                    copied.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, copied)
         source_links.append(link(str(target.relative_to(output)) + "/run.json", attempt["run"]["run_id"]))
-    rendered_files = {}
+    rendered_files, render_queue = {}, {}
+    rotation = "15x,25y"
     for ordinal, node in enumerate(nodes, 1):
         for number, item in enumerate(node["attachments"], 1):
             if item["provenance"] == "missing":
@@ -503,8 +532,13 @@ def build_review(folder: str, manifest_file: str = "", output_folder: str = "rev
                 warnings.append({"node": node["id"], "kind": "file_unavailable", "path": item["path"]})
                 continue
             if source in rendered_files:
-                item.update(rendered_files[source])
+                original = rendered_files[source]
+                item.update({k: original[k] for k in ('available', 'copied_file', 'preview_kind',
+                    'structure_summary', 'render_input', 'render_conversion') if k in original})
+                if source in render_queue:
+                    render_queue[source][2].append(item)
                 continue
+            rendered_files[source] = item
             extension = source.suffix.lower() or ".vasp"
             name = f"S{ordinal:03d}-{number:02d}{extension}"
             copied = output / "structures" / name
@@ -516,8 +550,7 @@ def build_review(folder: str, manifest_file: str = "", output_folder: str = "rev
                 # The package includes the original maintained structure-image
                 # script, not a fork of its reader/renderer.
                 os.environ.setdefault("MPLBACKEND", "Agg")
-                from structure_image import generate_structure_image
-                from ase.io import read
+                from structure_image import _load_atoms, structure_bounds
                 render_input = copied
                 if extension == ".json":
                     # Native Atom Structure JSON is data, not an ASE database.
@@ -534,20 +567,30 @@ def build_review(folder: str, manifest_file: str = "", output_folder: str = "rev
                     write(render_input, atoms, format="extxyz")
                     item["render_input"] = str(render_input.relative_to(output))
                     item["render_conversion"] = "Native JSON coordinates/cell only; format conversion for preview, not a historical original."
-                saved_atoms = read(render_input)
+                saved_atoms = _load_atoms(str(render_input.parent), render_input.name)
+                if isinstance(saved_atoms, dict):
+                    raise ValueError(saved_atoms["error"])
                 item["structure_summary"] = {"atom_count": len(saved_atoms),
                     "elements": dict(Counter(saved_atoms.get_chemical_symbols())),
                     "cell": saved_atoms.cell.array.tolist(), "cell_lengths": saved_atoms.cell.lengths().tolist(),
                     "pbc": saved_atoms.pbc.tolist(), "source": "saved_file_metadata_no_calculation"}
-                result = generate_structure_image(str(render_input.parent), render_input.name,
-                    str(preview.relative_to(Path.cwd().resolve())), rotation="15x,25y", dpi=300)
-                if result.get("error") or not preview.is_file():
-                    raise ValueError(result.get("error") or "Renderer produced no image")
-                item["preview"] = str(preview.relative_to(output))
+                bounds = structure_bounds(saved_atoms, rotation)
+                render_queue[source] = (saved_atoms, preview, [item], bounds, node["id"])
             except Exception as exc:
                 warnings.append({"node": node["id"], "kind": "preview_unavailable", "message": str(exc)})
-            rendered_files[source] = {k: item[k] for k in ('available', 'copied_file', 'preview_kind',
-                'structure_summary', 'preview', 'render_input', 'render_conversion') if k in item}
+    if render_queue:
+        from structure_image import render_atoms
+        bounds = list(zip(*(entry[3] for entry in render_queue.values())))
+        viewport = [min(bounds[0]), min(bounds[1]), max(bounds[2]), max(bounds[3])]
+        for atoms, preview, items, _, node_id in render_queue.values():
+            try:
+                preview.parent.mkdir(exist_ok=True)
+                render_atoms(atoms, preview, rotation, 300, bbox=viewport)
+                for item in items:
+                    item["preview"] = str(preview.relative_to(output))
+            except Exception as exc:
+                warnings.append({"node": node_id, "kind": "preview_unavailable", "message": str(exc)})
+    for node in nodes:
         fragments = []
         for item in [*node["structures"], *node["attachments"]]:
             body = f'<p>{escape(item["provenance"])} · {escape(item.get("relation", "output"))} · {escape(str(item.get("note", "")))}</p>'
@@ -604,7 +647,7 @@ def build_review(folder: str, manifest_file: str = "", output_folder: str = "rev
     stats = statistics(attempts)
     report = {"schema_version": 2, "title": str(manifest.get("title", "Modelling review")),
         "summary": str(manifest.get("summary", "")), "statistics": stats, "nodes": nodes, "operations": operation_rows, "warnings": warnings,
-        "provenance_note": "Native IDs are checked against the selected export. Titles, outcomes, edges and historical-file attribution are the review Agent's annotations; file existence alone is not historical proof.",
+        "provenance_note": "Retained writes use the native Run and command version record. Legacy file attributions and reviewer annotations are recorded separately.",
         "preview_note": "Previews render saved files now; no archived program or scientific calculation was executed.",
         "story": story, "annotations_optional": simple,
         "explanation_status": "optional" if simple else "complete" if not unexplained and not unexplained_commands else "incomplete",

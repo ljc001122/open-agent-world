@@ -47,7 +47,7 @@ def render(events):
     return "\n".join(lines)
 
 
-def execution_path(models, tools):
+def execution_path(models, tools, activity=()):
     """Readable inventory from native invocations, without inventing execution.
 
     Calls are ordered by start time: a delegation may enclose its children's
@@ -69,6 +69,13 @@ def execution_path(models, tools):
             f"request={row.get('model_request')}, attempt={row.get('model_attempt', 1)}; "
             f"input={row.get('input_tokens')}, output={row.get('output_tokens')}, reasoning={row.get('reasoning_tokens')}; "
             f"max_output={row.get('max_output_tokens')}, finish={row.get('finish_reason')}"))
+    for row in activity:
+        detail = row.get("detail") or {}
+        event = detail.get("recovery_event")
+        if event in {"model_output_recovery", "model_output_discarded"}:
+            metadata = row["metadata"]
+            timeline.append((row["timestamp"], "模型输出", metadata.get("role"), row["identity"],
+                "截断 · 已丢弃，未派发", metadata.get("text")))
     for index, row in enumerate(tools, 1):
         args = row.get('effective_arguments') or row.get('arguments') or {}
         args = args if isinstance(args, dict) else {}
@@ -86,9 +93,15 @@ def execution_path(models, tools):
         if not row.get('response_complete', True) or row.get('state') != 'returned':
             kind = '结果不完整/执行状态未知'
         elif isinstance(error, dict) and error.get('input_check'):
-            kind = '输入检查拒绝 · 建模未执行'
+            kind = {
+                'step_input_pending': '输入检查回执待收取 · 建模未执行',
+                'step_input_unknown': '输入检查状态未知 · 建模未执行',
+                'step_input_check_failed': '输入检查失败 · 建模未执行',
+            }.get(error.get('code'), '输入检查拒绝 · 建模未执行')
             guard = payload(error['input_check'])
-            details.append(f"guard_command={guard.get('command_id')}, exit={guard.get('exit_code')}")
+            recovery = payload(error.get('recovery'))
+            operation = recovery.get('operation_id') or guard.get('command_id') or guard.get('operation_id')
+            details.append(f"guard_command={operation}, exit={guard.get('exit_code')}")
             if error.get('reused_input_check'):
                 details.append('复用检查回执，未重复执行 guard')
         elif isinstance(error, dict) and (error.get('command_dispatched') is False or
@@ -325,7 +338,7 @@ def export_run(database, output_root, *, run_id=None, label="difficult problem",
     write_json("model thinking.json", thinking)
     write_json("model requests.json", model_logs)
     write_json("tool calls.json", tool_logs)
-    (folder / "execution path.md").write_text(execution_path(model_logs, tool_logs), encoding="utf-8")
+    (folder / "execution path.md").write_text(execution_path(model_logs, tool_logs, native_activity), encoding="utf-8")
     write_json("tool receipts.json", receipts)
     write_json("experiment.json", experiment_metadata(run, prompt, model_logs, tool_logs,
         task_id=task_id, repeat=repeat, variant=variant, acceptance=acceptance))

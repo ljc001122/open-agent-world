@@ -3,7 +3,8 @@ from pathlib import Path
 from typing import Optional
 
 from ase.build import surface
-from ase.io import read, write
+from ase.io import read
+from structure_versions import write_structure as write
 from pymatgen.core import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 

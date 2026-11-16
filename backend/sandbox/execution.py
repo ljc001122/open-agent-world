@@ -136,6 +136,7 @@ class _CommandExecution:
     receipt: dict | None = field(default=None, init=False)
     concurrent_commands: tuple[dict, ...] = field(default=(), init=False)
     secret_token: Token | None = field(default=None, init=False)
+    output_staging: str | None = field(default=None, init=False)
 
     async def run(self) -> CommandResult:
         self.command_id = self.operation_id or uuid4().hex
@@ -178,7 +179,11 @@ class _CommandExecution:
             raise
         finally:
             try:
-                await self._finish_receipt()
+                try:
+                    if self.output_staging is not None and self.receipt["phase"] == "executing":
+                        await self.services._complete_committed(self._retain_outputs())
+                finally:
+                    await self._finish_receipt()
             finally:
                 if self.secret_token is not None:
                     self.services._execution_secrets.reset(self.secret_token)
@@ -201,14 +206,16 @@ class _CommandExecution:
         requirements = execution_profile_references(
             self.services, self.agent_id, self.sandbox_id, background_job_id=self.background_job_id,
         )
+        context = self.services.run_manager.current_context
+        retain_outputs = context is not None and context.agent_id == self.agent_id
         if self.skill_request is not None:
             from backend.skill_runtime import resolve_skill_mount
             if self.agent_id is None:
                 raise ResourceValidationError("Skill execution requires an Agent")
             return resolve_skill_mount(self.services, self.agent_id, self.sandbox_id, self.skill_request,
-                runtime_requirements=requirements)
+                runtime_requirements=requirements, retain_outputs=retain_outputs)
         if requirements:
-            return bind_command_profiles(self.services.plugins, requirements, self.argv)
+            return bind_command_profiles(self.services.plugins, requirements, self.argv, retain_outputs=retain_outputs)
         return self.argv, None
 
     def _configure_python(self) -> None:
@@ -289,6 +296,17 @@ class _CommandExecution:
             await self._configure_workspace()
             self.services._require_card_type(self.sandbox_id, CardType.SANDBOX)
             self._start_receipt(secrets)
+            if self.agent_id and self.receipt["run_id"] and self.execution_argv[:4] == [
+                "python3", "-I", "-S", "_oaw_profile/runner.py",
+            ]:
+                self.output_staging = ".oaw-command-output-" + self.command_id
+
+    async def _retain_outputs(self) -> None:
+        from .command_outputs import retain_outputs
+        try:
+            await retain_outputs(self, self.output_staging)
+        except (OSError, ValueError, DomainError, SandboxError) as error:
+            self.receipt["saved_outputs_error"] = type(error).__name__
 
     def _start_receipt(self, secrets: tuple[str, ...]) -> None:
         # Build the entire journal entry before exposing it to history readers.

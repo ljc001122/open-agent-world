@@ -10,7 +10,7 @@ from oaw_runtime import (
 
 import numpy as np
 from ase.build import nanotube
-from ase.io import write
+from structure_versions import write_structure as write
 
 
 def build_nanotube(

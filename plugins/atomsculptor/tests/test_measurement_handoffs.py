@@ -301,7 +301,7 @@ def test_retired_planner_diagnostic_quota_is_discarded_on_loading(quota):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guard_state", ["verified", "changed", "unknown", "timeout"])
+@pytest.mark.parametrize("guard_state", ["verified", "changed", "unknown", "timeout", "not_started"])
 async def test_typed_consumer_sequences_native_guard_and_manifest_before_modelling(guard_state):
     payload = b"C fixture bytes"
     output = artifact()
@@ -320,6 +320,8 @@ async def test_typed_consumer_sequences_native_guard_and_manifest_before_modelli
         if args["argv"][1].startswith(".oaw-input-check-"):
             if guard_state=="timeout":raise TimeoutError("input-check receipt lost")
             if guard_state=="unknown":return {"status":"running","command_id":"guard-op"}
+            if guard_state=="not_started":
+                return {"ok": False, "error": {"command_dispatched": False, "code": "environment_preparation_failed"}}
             if guard_state=="changed":return {"exit_code":1,"command_id":"guard-op","stderr":"hash mismatch"}
             return {"exit_code":0,"command_id":"guard-op","stdout":json.dumps({"oaw_inputs_verified":json.loads(args["argv"][2])})}
         return {"exit_code":0,"command_id":"consumer-op","stdout":"next measured fact"}
@@ -342,8 +344,105 @@ async def test_typed_consumer_sequences_native_guard_and_manifest_before_modelli
         assert e.current_experiment()["execution_inputs"]["argv"]==[]
     else:
         assert not modelling and "consumer.py" not in files and "input-context.json" not in files and e.execution_sequence==1
-        assert result["error"]["code"] == ("step_input_unknown" if guard_state in {"unknown", "timeout"} else "step_input_changed")
-        assert bool(e.executions) == (guard_state in {"unknown", "timeout"})
+        expected = {"unknown": "step_input_unknown", "timeout": "step_input_unknown",
+                    "changed": "step_input_changed", "not_started": "step_input_check_failed"}
+        assert result["error"]["code"] == expected[guard_state]
+        assert result["error"]["command_dispatched"] is False and not e.executions
+        assert bool(e.steps.pending_input_check()) == (guard_state in {"unknown", "timeout"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_wait", ["success", "failure", "cancelled", "timeout", "mismatch", "stopped"])
+async def test_consumer_collects_same_native_input_check_before_saving(first_wait):
+    output = artifact()
+    e, _, first = await setup(stdout=record(artifacts=[output]))
+    await first()
+    definitions = [ScopedToolDefinition("operation:" + name, name, "native fixture")
+                   for name in ("write_sandbox_text_file", "execute_command", "wait_sandbox_operation")]
+    e.configure_tools(definitions)
+    e.steps.enable_helpers()
+    calls, files = [], {}
+    checked_inputs = None
+    stopped = asyncio.Event()
+
+    async def native(capability, args):
+        nonlocal checked_inputs
+        name = capability.removeprefix("operation:")
+        calls.append((name, deepcopy(args)))
+        if name == "write_sandbox_text_file":
+            assert args["path"] not in files
+            files[args["path"]] = args["content"]
+            return {"written": len(args["content"].encode())}
+        if name == "execute_command":
+            if args["argv"][1].startswith(".oaw-input-check-"):
+                assert checked_inputs is None
+                checked_inputs = json.loads(args["argv"][2])
+                return {"status": "running", "operation_id": "guard-op", "command_id": "guard-op"}
+            assert args["argv"][1] == "consumer.py" and "inputs.json" in files
+            return {"exit_code": 0, "command_id": "consumer-op", "stdout": "measured result"}
+        assert name == "wait_sandbox_operation"
+        assert (args["sandbox"], args["operation_id"]) == ("box", "guard-op")
+        assert not {"consumer.py", "inputs.json"} & files.keys()
+        if sum(name == "wait_sandbox_operation" for name, _ in calls) == 1:
+            if first_wait == "timeout":
+                raise TimeoutError
+            if first_wait == "mismatch":
+                return {"exit_code": 0, "command_id": "another-command",
+                        "stdout": json.dumps({"oaw_inputs_verified": checked_inputs})}
+            if first_wait == "failure":
+                return {"exit_code": 1, "command_id": "guard-op", "stdout": ""}
+            if first_wait == "cancelled":
+                return {"ok": False, "status": "cancelled", "operation_id": "guard-op"}
+            if first_wait == "stopped":
+                stopped.set()
+        return {"exit_code": 0, "command_id": "guard-op",
+                "stdout": json.dumps({"oaw_inputs_verified": checked_inputs})}
+
+    start, *_, resume = typed_step_functions(e, definitions, native, stopped)
+    values = dict(sandbox="box", script_path="consumer.py", source="print('retained source')",
+        question="Measure one condition", expected_output="One value", stop_condition="One evaluation",
+        input_artifacts=[{"path": output["path"]}], input_manifest_path="inputs.json",
+        previous_assessment=prior(e), tool_context=SimpleNamespace(function_call_id="consumer"))
+    if first_wait == "stopped":
+        with pytest.raises(asyncio.CancelledError):
+            await start(**values)
+        assert e.steps.pending_input_check()["operation_id"] == "guard-op"
+    else:
+        result = await start(**values)
+        if first_wait in {"timeout", "mismatch"}:
+            recovery = result["error"]["recovery"]
+            assert result["error"]["code"] == "step_input_pending"
+            assert recovery["operation_id"] == "guard-op" and recovery["command_dispatched"] is False
+            action, allowed = e.actions.next_action(e)
+            assert "guard-op" in action and "resume_modelling_step" in allowed
+            assert "advance_modelling_stage" not in allowed
+            from test_execution_actions import prepare, request
+            req = request({"resume_modelling_step", "run_modelling_step", "advance_modelling_stage",
+                           "inspect_sandbox", "finish_task"})
+            prepare(e, req)
+            advertised = {d.name: d for t in req.config.tools for d in t.function_declarations}
+            assert set(advertised) == {"resume_modelling_step", "inspect_sandbox", "finish_task"}
+            schema = advertised["resume_modelling_step"].parameters_json_schema
+            assert schema["properties"]["script_path"]["enum"] == ["consumer.py"]
+            assert "corrections" not in schema["properties"]
+            assert (await start(**values))["error"]["code"] == "step_in_progress"
+            resume_args = dict(subtask_id=recovery["subtask_id"], script_path="consumer.py", reason="Collect receipt",
+                               tool_context=SimpleNamespace(function_call_id="resume"))
+            assert (await resume(**resume_args, corrections={"argv": ["different"]}))["error"]["code"] == "input_check_resume"
+            assert e.closeout_checkpoint("fixture")["execution_steps"]["pending_input_check"] == recovery
+            result = await resume(**resume_args)
+        if first_wait in {"success", "timeout", "mismatch"}:
+            assert result["ok"] and result["step"]["input_check"]["command_id"] == "guard-op"
+            assert files["consumer.py"] == values["source"]
+            assert json.loads(files["inputs.json"]) == checked_inputs
+            assert e.latest_experiment().command_id == "consumer-op" and e.execution_sequence == 2
+        else:
+            assert result["error"]["code"] == ("step_input_changed" if first_wait == "failure" else "step_input_check_failed")
+        assert not e.steps.pending_input_check()
+    commands = [args["argv"][1] for name, args in calls if name == "execute_command"]
+    assert commands[0].startswith(".oaw-input-check-")
+    assert commands[1:] == (["consumer.py"] if first_wait in {"success", "timeout", "mismatch"} else [])
+    assert not e.executions and not e.pending
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,8 @@ import json
 import os
 from pathlib import Path
 
+from structure_versions import save_structure
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -51,7 +53,7 @@ def main() -> None:
             if not args.material_id.startswith("mp-"):
                 parser.error("--material-id must be a Materials Project ID such as mp-13")
             structure = client.get_structure_by_material_id(args.material_id)
-            structure.to(filename=str(output), fmt="cif")
+            save_structure(output, lambda target: structure.to(filename=str(target), fmt="cif"))
             print(json.dumps({"output": str(output), "material_id": args.material_id,
                               "atom_count": len(structure)}))
 

@@ -61,6 +61,25 @@ def _load_atoms(folder: str, file_name: str):
         return {"error": str(exc)}
 
 
+def structure_bounds(atoms, rotation):
+    """Return ASE's fitted image limits in physical units."""
+    from ase.io.utils import PlottingVariables
+    view = PlottingVariables(atoms, rotation=rotation, scale=1, maxwidth=float("inf"))
+    x, y = view.offset[:2]
+    return x, y, x + view.w, y + view.h
+
+
+def render_atoms(atoms, path, rotation, dpi, *, bbox=None):
+    fig, ax = plt.subplots()
+    try:
+        plot_atoms(atoms, ax=ax, rotation=rotation, bbox=bbox)
+        ax.set_aspect("equal", adjustable="box")
+        ax.axis("off")
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    finally:
+        plt.close(fig)
+
+
 def generate_structure_image(
     folder: str,
     file_name: str,
@@ -80,14 +99,7 @@ def generate_structure_image(
 
     output_file_path = resolve_output_path(output_image_name)
     try:
-        fig, ax = plt.subplots()
-        plot_atoms(atoms, ax=ax, rotation=rotation)
-        # ASE supplies coordinates in physical units; automatic axes stretching
-        # otherwise turns atomic circles into ellipses and distorts the cell.
-        ax.set_aspect("equal", adjustable="box")
-        ax.axis("off")
-        plt.savefig(output_file_path, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
+        render_atoms(atoms, output_file_path, rotation, dpi)
         return {
             "original_file": file_name,
             "output_image_file": display_path(output_file_path),

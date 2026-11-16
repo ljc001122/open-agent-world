@@ -77,7 +77,7 @@ class ArtifactStore:
         if run_id is None:
             return []
         with self.database.locked() as db:
-            rows = db.execute("SELECT record_json FROM artifact_versions WHERE json_extract(record_json, '$.provenance.run_id')=? ORDER BY rowid", (run_id,)).fetchall()
+            rows = db.execute("SELECT record_json FROM artifact_versions WHERE json_extract(record_json, '$.provenance.run_id')=? AND json_extract(record_json, '$.collection_id') IS NOT NULL ORDER BY rowid", (run_id,)).fetchall()
         return [{key: record.get(key) for key in ('artifact_id', 'version_id', 'collection_id', 'name', 'state')}
                 for row in rows for record in [json.loads(row[0])]]
 
@@ -309,7 +309,6 @@ class ArtifactStore:
                      agent_id=None, run_id=None, request_key=None, expected_sha256=None):
         """Stream user or trusted-runtime bytes through the retained-version journal."""
         from backend.runs.models import TERMINAL_RUN_STATUSES
-        from backend.sandbox.models import SandboxValidationError
 
         def authorize():
             services.conversations.get_session(collection_id, session_id)
@@ -323,6 +322,34 @@ class ArtifactStore:
                     raise PermissionDeniedError('Runtime upload Run is no longer active')
                 self.authorize(services, collection_id, agent_id, 'artifact.publish')
 
+        return await self._upload(services, collection_id, filename, chunks,
+            authorize=authorize, agent_id=agent_id, run_id=run_id, session_id=session_id,
+            request_key=request_key, expected_sha256=expected_sha256)
+
+    async def retain_run_output(self, services, filename, chunks, *, agent_id, run_id,
+                                sandbox_id, command_id, workspace_path, sequence, started_at, authorize):
+        return await self._upload(services, None, filename, chunks, authorize=authorize,
+            agent_id=agent_id, run_id=run_id, source={
+                'sandbox_id': sandbox_id, 'command_id': command_id,
+                'workspace_path': workspace_path, 'sequence': sequence, 'started_at': started_at,
+            })
+
+    def run_outputs(self, run_id):
+        with self.database.locked() as db:
+            rows = db.execute("""
+                SELECT record_json FROM artifact_versions WHERE state='ready'
+                AND json_extract(record_json, '$.collection_id') IS NULL
+                AND json_extract(record_json, '$.provenance.run_id')=?
+                AND json_type(record_json, '$.provenance.command_id')='text'
+                ORDER BY rowid
+            """, (run_id,)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    async def _upload(self, services, collection_id, filename, chunks, *, authorize,
+                      agent_id=None, run_id=None, session_id=None, request_key=None,
+                      expected_sha256=None, source=None):
+        from backend.sandbox.models import SandboxValidationError
+
         try:
             valid_name = isinstance(filename, str) and 0 < len(filename) <= 255 and parts(filename) == [filename]
         except SandboxValidationError:
@@ -330,7 +357,7 @@ class ArtifactStore:
         if not valid_name:
             raise ResourceValidationError('Choose a single safe filename')
         fingerprint = None
-        if agent_id is not None:
+        if agent_id is not None and collection_id is not None:
             if not isinstance(request_key, str) or not 1 <= len(request_key) <= 128 or not expected_sha256:
                 raise ResourceValidationError('Runtime uploads require a request key and content digest')
             fingerprint = hashlib.sha256(json.dumps({'collection_id': collection_id, 'session_id': session_id,
@@ -338,13 +365,14 @@ class ArtifactStore:
         version_id = str(uuid4())
         record = dict(version_id=version_id, artifact_id=str(uuid4()), collection_id=collection_id,
             name=filename, state='staging', created_at=now(), size_bytes=0, manifest=[], error=None,
-            retention={'owner': 'user', 'reason': 'conversation attachment', 'retained': True},
+            retention={'owner': 'user', 'reason': 'conversation attachment' if collection_id else 'Run output',
+                       'retained': True},
             provenance={'agent_id': agent_id, 'run_id': run_id, 'session_id': session_id,
-                        'sandbox_id': None, 'inputs': [], 'finalized_inputs': True})
+                        'sandbox_id': None, 'inputs': [], 'finalized_inputs': True, **(source or {})})
         async with self._lock, services._node_mutation(read_only=True):
             authorize()
             with self.database.transaction(immediate=True) as db:
-                if agent_id is not None:
+                if fingerprint is not None:
                     previous = db.execute('SELECT request_hash, record_json FROM artifact_versions WHERE request_owner=? AND request_key=?',
                                           (agent_id, request_key)).fetchone()
                     if previous:
@@ -358,7 +386,8 @@ class ArtifactStore:
                 db.execute('INSERT INTO artifact_versions VALUES (?,?,?,?,?,?,?)',
                     (version_id, record['artifact_id'], agent_id or 'user', request_key or version_id,
                      fingerprint or version_id, 'staging', json.dumps(record)))
-                db.execute('INSERT INTO artifact_references VALUES (?,?)', (collection_id, version_id))
+                if collection_id is not None:
+                    db.execute('INSERT INTO artifact_references VALUES (?,?)', (collection_id, version_id))
         committed = False
         try:
             staging = self.path(version_id, staging=True)
@@ -392,7 +421,8 @@ class ArtifactStore:
                 record.update(state='ready', ready_at=now())
                 self.save(record)
                 committed = True
-                self.notify(services, record)
+                if collection_id is not None:
+                    self.notify(services, record)
             return record
         except BaseException as error:
             if committed:

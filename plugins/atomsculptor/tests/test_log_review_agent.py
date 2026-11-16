@@ -632,3 +632,50 @@ def test_unassociated_command_and_durable_progress_remain_explainable(packaged):
     html = (workspace / 'final/records.html').read_text()
     assert '用途仅能依据argv推断' in html
     assert (workspace / 'final/raw/attempt-01/run activity.json').read_bytes() == (source / 'run activity.json').read_bytes()
+
+
+def test_report_uses_each_native_version_in_the_same_view(packaged):
+    from PIL import Image
+
+    module, _, workspace = packaged
+    task = workspace / "versioned"
+    task.mkdir()
+    for attempt_number, coordinate_sets in enumerate(([0, 1.2], [2.5]), 1):
+        run_id = f"r{attempt_number}"
+        attempt = native_fixture(task, run_id, run_id)
+        tools = json.loads((attempt / "tool calls.json").read_text())
+        tools[0]["response"]["measurements"] = {"artifacts": [{"path": "candidate.extxyz"}]}
+        (attempt / "tool calls.json").write_text(json.dumps(tools))
+        versions = []
+        for number, distance in enumerate(coordinate_sets):
+            version_id = f"version-{attempt_number}-{number}"
+            relative = f"versions/{version_id}/candidate.extxyz"
+            path = attempt / relative
+            path.parent.mkdir(parents=True)
+            path.write_text(f"2\nProperties=species:S:1:pos:R:3\nCu 0 0 0\nAu {distance} 0 0\n")
+            versions.append({"run_id": run_id, "command_id": "c1", "version_id": version_id,
+                "workspace_path": "candidate.extxyz", "path": relative, "provenance": "historical"})
+        if attempt_number == 1:
+            attachment = "versions/attachment/record.txt"
+            (attempt / attachment).parent.mkdir()
+            (attempt / attachment).write_text("Retained data in an unsupported preview format.")
+            versions.append({"run_id": run_id, "command_id": "c1", "version_id": "attachment",
+                "workspace_path": "record.txt", "path": attachment, "provenance": "historical"})
+        (attempt / "run outputs.json").write_text(json.dumps(versions))
+    (task / "task.json").write_text(json.dumps({"attempts": [
+        {"directory": "r1", "run_id": "r1"}, {"directory": "r2", "run_id": "r2"}]}))
+    result = module.build_review("versioned", output_folder="versioned-report")
+    report = workspace / "versioned-report"
+    trajectory = json.loads((report / "trajectory.json").read_text())
+    assert result["previews"] == 3
+    nodes = json.loads((report / "review.json").read_text())["nodes"]
+    attachment = next(item for node in nodes for item in node["attachments"] if item.get("version_id") == "attachment")
+    assert (report / attachment["copied_file"]).is_file()
+    items = [item for entry in trajectory["entries"] if entry["kind"] == "structure" for item in entry["structures"]]
+    assert [item["version_id"] for item in items] == ["version-1-0", "version-1-1", "version-2-0"]
+    assert all(item["provenance"] == "historical" for item in items)
+    images = [Image.open(report / item["preview"]) for item in items]
+    assert len({image.size for image in images}) == 1
+    assert len({image.tobytes() for image in images}) == 3
+    with ZipFile(workspace / result["bundle"]) as archive:
+        assert archive.read("raw/attempt-01/versions/version-1-0/candidate.extxyz") == (report / items[0]["copied_file"]).read_bytes()

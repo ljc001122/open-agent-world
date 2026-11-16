@@ -93,15 +93,22 @@ def test_indexed_export_keeps_durable_activity_after_live_preview_rotation(tmp_p
     from backend.runs.history import RunActivityHistory
     database, store, run = fixture_database(tmp_path)
     try:
-        RunActivityHistory(database, run.run_id).public('agent_progress',
+        activity_store = RunActivityHistory(database, run.run_id)
+        activity_store.public('agent_progress',
             {'kind': 'status', 'text': 'Early execution progress retained beyond the live preview'},
             'early-progress', run.created_at.isoformat())
+        activity_store.public('agent_progress', {'kind': 'status', 'role': 'builder',
+            'text': 'request 24 discarded at the output limit; retrying as request 25. No tools dispatched.',
+            'recovery_event': 'model_output_recovery', 'source_model_request': 24, 'recovery_model_request': 25},
+            'output-recovery', run.created_at.isoformat())
         folder = exporter().export_run(database.path, tmp_path / 'indexed', run_id=run.run_id, include_legacy_views=False)
         activity = json.loads((folder / 'run activity.json').read_text())
         assert activity[0]['metadata']['text'] == 'Early execution progress retained beyond the live preview'
         catalog = json.loads((folder / 'record catalog.json').read_text())
         assert any(row['kind'] == 'activity' and row['source'] == {'path': 'run activity.json', 'pointer': '/0'} for row in catalog['records'])
-        assert json.loads((folder / 'manifest.json').read_text())['durable_activity_records'] == 1
+        assert json.loads((folder / 'manifest.json').read_text())['durable_activity_records'] == 2
+        assert 'request 24 discarded at the output limit; retrying as request 25' in (folder / 'execution path.md').read_text()
+        assert activity[1]['detail']['source_model_request'] == 24
         assert not (folder / 'agent logs.txt').exists()
     finally:
         database.close()
@@ -139,6 +146,10 @@ def test_execution_path_distinguishes_guard_rejection_native_execution_unknown_a
         {**common, 'id': 'guard-ref', 'name': 'run_modelling_step', 'response': {'error': {
             'code': 'step_input_changed', 'command_dispatched': False,
             'input_check': {'command_id': 'native-guard', 'exit_code': 1}}}},
+        {**common, 'id': 'guard-wait-ref', 'name': 'run_modelling_step', 'response': {'error': {
+            'code': 'step_input_pending', 'command_dispatched': False,
+            'input_check': {'ok': False, 'error': {'code': 'tool_timeout'}},
+            'recovery': {'operation_id': 'pending-native-guard'}}}},
         {**common, 'id': 'execute-ref', 'name': 'run_modelling_step', 'response': {
             'step': {'state': 'finished'}, 'execution': {'command_id': 'native-script', 'exit_code': 0}}},
         {**common, 'id': 'partial-ref', 'name': 'run_modelling_step', 'response_complete': False,
@@ -153,6 +164,7 @@ def test_execution_path_distinguishes_guard_rejection_native_execution_unknown_a
     ]
     text = exporter().execution_path(models, tools)
     assert '输入检查拒绝 · 建模未执行' in text and 'native-guard' in text
+    assert '输入检查回执待收取 · 建模未执行' in text and 'pending-native-guard' in text
     assert text.count('实际执行 · 成功返回') == 1 and 'native-script' in text
     assert '结果不完整/执行状态未知' in text and '宿主拒绝 · 建模未执行' in text
     assert '请求中断' in text and '请求重试' in text

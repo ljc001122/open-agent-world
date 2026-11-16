@@ -64,7 +64,16 @@ UI screenshots. Archived code is never executed and missing structures are not
 regenerated. Validation or import alone does not create another geometry frame;
 sequence arrows do not prove a dependency. Unknown usage stays unknown.
 
-Skill version 0.3.2 provides this minimal sequence. New cards receive it; existing
+The modelling I/O helpers and built-in writing Skills stage each structure
+save for OAW's private Artifact journal. The Run export links exact file
+versions to their Sandbox command, including saves before a failed validation.
+The review uses that version first and renders all previews in a shared view.
+For custom scripts, use `write_extxyz` or `write_structure` to retain each
+save. The historical files are available to Report through its Run-history
+and Sandbox permissions. Earlier files can be rendered when independently
+preserved; a missing version is a short note in the figure.
+
+Skill version 0.3.3 provides this sequence. New cards receive it; existing
 editable private toolboxes and saved Agent instructions are preserved. To adopt the
 new version, create a new Report Agent or explicitly update its instruction/toolbox.
 The native default run_execution_deadline_seconds=0 disables a total Run deadline;

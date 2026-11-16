@@ -21,7 +21,7 @@ def signature(info):
 
 
 def transfer(root, operation, *, path='', paths=None, expected=None, offset=0,
-             data=None, read_only=False, runtime_pinned_root=None, allow_hardlink=False):
+             data=None, read_only=False, runtime_pinned_root=None, allow_hardlink=False, missing_ok=False):
     root = Path(root)
     target = root.joinpath(*parts(path))
     if operation == 'capture_manifest':
@@ -47,7 +47,11 @@ def transfer(root, operation, *, path='', paths=None, expected=None, offset=0,
         for relative in paths or []:
             if not relative or len(parts(relative)) == 0:
                 raise SandboxValidationError('Select explicit files or directories, not the workspace root')
-            visit(relative)
+            try:
+                visit(relative)
+            except FileNotFoundError:
+                if not missing_ok or relative in result:
+                    raise
         return sorted(result.values(), key=lambda item: item['path'])
     if operation == 'download_info':
         with pinned(target, runtime_pinned_root=runtime_pinned_root, allow_hardlink=allow_hardlink) as fd:

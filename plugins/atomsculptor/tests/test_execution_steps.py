@@ -336,6 +336,64 @@ async def test_dependent_batch_keeps_call_ids_and_returns_individual_rejections(
 
 
 @pytest.mark.asyncio
+async def test_output_recovery_focuses_the_finished_execution_without_replaying_it():
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from oaw_atomsculptor.model_recovery import bounded_output_model
+    from test_execution_actions import declarations, response
+
+    diagnostic = {"kind": "diagnostic", "metadata": {"checks": {"measured_gap": False, "reference": True},
+                                                   "files_saved": {"unconfirmed.extxyz": 8}}}
+    e, native_calls, run = await setup(stdout=json.dumps({"oaw_measurements": diagnostic}))
+    e.actions.sandbox_states["box"] = "ready"
+    await run()
+    req = request({"run_modelling_step", "patch_modelling_step", "rewrite_modelling_step", "rerun_modelling_step",
+                   "read_modelling_source", "read_tool_result", "advance_modelling_stage", "finish_task",
+                   "inspect_sandbox", "list_sandbox_files"})
+    signed = types.Content(role="model", parts=[types.Part(thought_signature=b"signed",
+        function_call=types.FunctionCall(name="run_modelling_step", id="step-call", args={}))])
+    receipt = types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+        name="run_modelling_step", id="step-call", response={"command_id": "native-op"}))])
+    req.contents.extend([signed, receipt])
+    prepare(e, req)
+    await e.trace.callbacks("structure_builder")["before_model_callback"](None, req)
+    attempts = []
+
+    class Fixture(BaseLlm):
+        model: str = "openai/step-fixture"
+
+        async def generate_content_async(self, request, stream=False):
+            attempts.append(request)
+            if len(attempts) == 1:
+                yield response(truncated=True)
+                return
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=
+                types.FunctionCall(name="advance_modelling_stage", id="assess", args={"stage": "observe",
+                    "hypothesis": "Check the gap", "measurement": "The script's gap diagnostic failed",
+                    "outcome": "continue", "next_step": "Repair the measured gap"}))]))
+
+    model = bounded_output_model(Fixture(), e.trace, "structure_builder", e, NS(types=types), 16384)
+    accepted, = [reply async for reply in model.generate_content_async(req)]
+    first, recovered = attempts
+    assert {"run_modelling_step", "rewrite_modelling_step", "rerun_modelling_step"} <= declarations(first)
+    assert declarations(recovered) == {"advance_modelling_stage", "finish_task", "patch_modelling_step",
+                                       "read_modelling_source", "read_tool_result"}
+    assert recovered.contents[:2] == [signed, receipt]
+    assert first.config.max_output_tokens == recovered.config.max_output_tokens == 16384
+    frame = recovered.contents[-1].parts[0].text
+    assert frame.startswith("HOST FINISHED EXECUTION RECOVERY\n")
+    facts = json.loads(frame.splitlines()[1])
+    assert facts["command_id"] == "native-op" and facts["script_path"] == "step.py" and facts["script_version"] == 1
+    assert facts["exit_code"] == 0 and facts["measurement_kind"] == "diagnostic"
+    assert facts["failed_script_checks"] == ["measured_gap"] and facts["failed_constraints"] == []
+    assert facts["confirmed_artifact_paths"] == []
+    call = accepted.content.parts[0].function_call
+    assert e.workflow.advance(e, **call.args)["ok"]
+    assert len(native_calls) == 2 and e.execution_sequence == 1
+    assert not e.outputs and not e.imports
+
+
+@pytest.mark.asyncio
 async def test_builder_handoff_replaces_expanded_advice_with_authoritative_current_stage():
     e, calls, run = await setup()
     part = types.Part(function_call=types.FunctionCall(name="structure_builder", args={

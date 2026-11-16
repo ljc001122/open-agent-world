@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.errors import DomainError, NotFoundError, PermissionDeniedError, ResourceValidationError
 from backend.plugins.registry import CapabilityDefinition, CapabilitySelector
 from backend.runs import TERMINAL_RUN_STATUSES
-from backend.sandbox.files import parts
+from backend.sandbox.files import parts, run_file_operation
 from backend.sandbox.transfers import CHUNK_BYTES, MAX_ENTRIES
 from open_agent_world.run_export import export_run
 
@@ -32,7 +33,7 @@ class RunExport(BaseModel):
     sandbox_id: str
     run_id: str | None = Field(default=None, description="Omit for this Agent's latest root Run; an active latest Run is reported, never replaced by an older one.")
     include_task_attempts: bool = Field(default=True, description="Include settled root Runs linked by this Agent's native task_id or explicit continuation_run_id.")
-    include_sandbox_files: bool = Field(default=True, description="Capture current workspaces referenced by native records, only with independent Sandbox execute grants. These are collection snapshots, not historical versions.")
+    include_sandbox_files: bool = Field(default=True, description="Export retained command output versions and current workspace snapshots, only with independent Sandbox execute grants.")
 
 
 def authorize(services, capability, action):
@@ -71,6 +72,52 @@ def source_sandboxes(services, archive):
         if path.name in {"sandbox logs.json", "tool calls.json", "tool receipts.json", "execution checkpoint.json"}:
             visit(json.loads(path.read_text()))
     return sorted(found)
+
+
+async def export_run_outputs(services, authorize_export, capability, request, row, folder, warnings):
+    store = services.resources.artifacts
+    items, size = [], 0
+    for record in store.run_outputs(row.run_id):
+        source = record["provenance"]
+        if source["agent_id"] != row.agent_id:
+            continue
+        version, name = record["version_id"], record["name"]
+        relative = f"versions/{version}/{name}"
+        item = {key: source[key] for key in ("run_id", "command_id", "sandbox_id", "workspace_path", "sequence", "started_at")}
+        item.update(version_id=version)
+        destination = folder / relative
+        async with services._node_mutation(read_only=True):
+            authorize_export()
+            services.capabilities.require_sandbox_execute(capability.agent_id, request.sandbox_id)
+            try:
+                services.capabilities.require_sandbox_execute(capability.agent_id, source["sandbox_id"])
+                if size + record["size_bytes"] > store.max_version_bytes:
+                    raise ResourceValidationError("Run output export exceeds the configured bundle limit")
+                await run_file_operation(store.validate, record)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                await run_file_operation(shutil.copyfile, store.path(version) / name, destination)
+                size += record["size_bytes"]
+                item.update(path=relative, provenance="historical")
+            except (OSError, ValueError, DomainError, RuntimeError) as error:
+                destination.unlink(missing_ok=True)
+                item.update(provenance="missing", error=type(error).__name__)
+                warnings.append({"kind": "historical_output_unavailable", "version_id": version,
+                    "sandbox_id": source["sandbox_id"], "error": type(error).__name__})
+        items.append(item)
+    commands = json.loads((folder / "sandbox logs.json").read_text())
+    for command in commands:
+        if command.get("saved_outputs_error"):
+            warnings.append({"kind": "historical_output_capture_failed", "command_id": command["id"],
+                "error": command["saved_outputs_error"]})
+        for saved in command.get("saved_outputs", []):
+            if saved.get("error"):
+                items.append({"run_id": row.run_id, "command_id": command["id"],
+                    "sandbox_id": command["sandbox_id"], "workspace_path": saved["path"],
+                    "started_at": command["started_at"], "sequence": saved.get("sequence", ""),
+                    "provenance": "missing", "error": saved["error"]})
+    if items:
+        items.sort(key=lambda item: (item["started_at"], item["sequence"]))
+        (folder / "run outputs.json").write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n")
 
 
 async def invoke(services, capability, action, arguments):
@@ -155,6 +202,9 @@ async def invoke(services, capability, action, arguments):
             manifest = json.loads(manifest_path.read_text())
             manifest["source_database"] = "OAW host-managed Run store"
             manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+            if request.include_sandbox_files:
+                await export_run_outputs(services, lambda: authorize(services, capability, action),
+                    capability, request, row, archive / relative, warnings)
         sandboxes = source_sandboxes(services, archive)
         if request.include_sandbox_files:
             if not sandboxes:
@@ -215,6 +265,8 @@ async def invoke(services, capability, action, arguments):
                                 warnings.append({"kind": "blocked_file", "sandbox_id": sandbox_id, "path": path})
                                 continue
                             if entry["directory"]:
+                                if re.fullmatch(r"\.oaw-command-output-[a-f0-9]{32}", PurePosixPath(path).name):
+                                    continue
                                 if not directory and re.fullmatch(r"oaw-run-review-[a-f0-9]{32}(?:-report)?", path):
                                     warnings.append({"kind": "previous_review_export_excluded", "sandbox_id": sandbox_id, "path": path})
                                 else:

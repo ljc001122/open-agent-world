@@ -229,3 +229,94 @@ def test_first_export_claims_its_workspace_before_writing_and_retains_it_for_exe
             assert list((root / 'Review').iterdir()) == [root / 'Review' / 'untouched.txt']
 
     client.portal.call(scenario)
+
+
+def test_native_command_versions_survive_overwrites_and_continuation(runtime_client, monkeypatch):
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from backend.runs.manager import _current_invocation
+    from backend.runs.models import InvocationCaller, InvocationContext
+
+    client, backend, native = runtime_client
+    source = create_node(client, 'atomsculptor.agent')
+    reviewer, destination, *_ = setup_reviewer(client)
+    _, sandbox, *_ = setup_skill(client)
+    connect(client, source, sandbox, 'execute')
+    source_edge = connect(client, reviewer, sandbox, 'execute')
+    connect(client, reviewer, source, 'agent.run_history')
+    services = client.app.state.services
+    native_run = native.run_appcontainer
+    from oaw_atomsculptor import structure_versions
+    writer_source = Path(structure_versions.__file__).read_text()
+    current_writes = []
+
+    def write_in_command(profile, argv, **options):
+        from backend.sandbox import pack_profile_runner
+
+        recipe = json.loads(Path(argv[3]).with_name("recipe.json").read_text())
+        recipe["command_id"] = argv[4]
+        runner_argv = list(argv[3:])
+        program = writer_source + """
+import sys
+for coordinate in sys.argv[1:]:
+    save_structure("candidate.xyz", lambda target: target.write_text("1\\n\\nC " + coordinate + " 0 0\\n"))
+"""
+        captured = {}
+        # Exercise the Pack runner's environment construction without an
+        # interpreter install or a real Windows AppContainer on the test host.
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "argv", runner_argv)
+            patch.setattr(pack_profile_runner, "verify_imports", lambda *args: None)
+            patch.setattr(pack_profile_runner.subprocess, "call", lambda args, *, env, **kwargs: captured.update(env) or 0)
+            assert pack_profile_runner.execute(recipe, Path(argv[3]).parent) == 0
+        subprocess.run([sys.executable, "-c", program, *current_writes], check=True,
+            cwd=options["cwd"], env={**os.environ, "OAW_COMMAND_OUTPUTS": captured["OAW_COMMAND_OUTPUTS"]})
+        return native_run(profile, argv, **options)
+
+    monkeypatch.setattr(native, 'run_appcontainer', write_in_command)
+    store = services.run_manager.store
+
+    async def attempt(coordinates, previous=None):
+        current_writes[:] = coordinates
+        run = store.create(agent_id=source["id"], runtime_provider_id="atomsculptor.adk-team",
+            caller_kind="user", task_id="structure-history")
+        if previous:
+            store.update_lifecycle(run.run_id, continuation_run_id=previous.run_id)
+        store.update_status(run.run_id, RunStatus.RUNNING)
+        token = _current_invocation.set(InvocationContext(run_id=run.run_id, agent_id=source["id"],
+            root_run_id=run.run_id, parent_run_id=None, caller=InvocationCaller("user"),
+            context_id=None, task_id=run.task_id, runtime_provider_id=run.runtime_provider_id))
+        try:
+            result = await WorldAgentCapabilityProvider(services).invoke_tool(
+                source["id"], "operation:execute_command", {"sandbox": sandbox["id"], "argv": ["python3", "build.py"]})
+        finally:
+            _current_invocation.reset(token)
+        store.update_status(run.run_id, RunStatus.SUCCEEDED if previous else RunStatus.FAILED)
+        return run, result["command_id"]
+
+    first, first_command = client.portal.call(attempt, ["0", "2"])
+    second, second_command = client.portal.call(attempt, ["4"], first)
+    assert not services.resources.artifacts.run_references(first.run_id)
+    assert not list(native.last_cwd.glob(".oaw-command-output-*"))
+    assert (native.last_cwd / "candidate.xyz").read_text() == "1\n\nC 4 0 0\n"
+    receipt = call(client, reviewer, 'export_agent_run', agent=source["id"], sandbox=destination["id"])
+    assert receipt["run_ids"] == [first.run_id, second.run_id]
+    archive = backend._sandboxes_root / destination["id"] / "workspace" / receipt["archive_path"]
+    task = json.loads((archive / "task.json").read_text())
+    versions = []
+    for attempt_info, command, coordinates in zip(task["attempts"], (first_command, second_command), (["0", "2"], ["4"])):
+        folder = archive / attempt_info["directory"]
+        outputs = json.loads((folder / "run outputs.json").read_text())
+        for item, coordinate in zip(outputs, coordinates, strict=True):
+            assert item["provenance"] == "historical"
+            assert (item["command_id"], item["workspace_path"]) == (command, "candidate.xyz")
+            assert (folder / item["path"]).read_text() == f"1\n\nC {coordinate} 0 0\n"
+            versions.append(item["version_id"])
+    assert len(set(versions)) == 3
+    assert client.delete('/api/edges/' + source_edge['id']).status_code == 200
+    denied = call(client, reviewer, 'export_agent_run', agent=source["id"], sandbox=destination["id"])
+    assert sum(w["kind"] == "historical_output_unavailable" for w in denied["warnings"]) == 3
+    denied_archive = archive.parent / Path(denied["archive_path"]).name
+    assert not list(denied_archive.glob("attempts/*/versions"))

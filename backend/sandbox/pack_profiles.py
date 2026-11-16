@@ -161,7 +161,7 @@ def execution_profile_references(services, agent_id, sandbox_id, *, background_j
                  for name in provider.sandbox_environments)
 
 
-def bind_command_profiles(registry, references, argv):
+def bind_command_profiles(registry, references, argv, *, retain_outputs=False):
     """Wrap literal ordinary argv; the existing backend still owns execution."""
     try:
         validate_command(argv)
@@ -169,10 +169,12 @@ def bind_command_profiles(registry, references, argv):
         raise SandboxValidationError(str(exc)) from exc
     recipe = resolve_profiles(registry, references)
     recipe['mode'] = 'command'
-    return _wrap_profile(RuntimeBundle('pack-profiles/runtime', ()), recipe, argv)
+    return _wrap_profile(RuntimeBundle('pack-profiles/runtime', ()), recipe, argv, retain_outputs)
 
 
-def _wrap_profile(bundle, recipe, arguments):
+def _wrap_profile(bundle, recipe, arguments, retain_outputs):
+    if retain_outputs:
+        recipe["retain_outputs"] = True
     runner = f"{RESERVED_DIRECTORY}/runner.py"
     files = (*bundle.files, (runner, Path(__file__).with_name("pack_profile_runner.py").read_bytes()),
              (f"{RESERVED_DIRECTORY}/recipe.json", json.dumps(recipe, sort_keys=True).encode()))
@@ -182,7 +184,7 @@ def _wrap_profile(bundle, recipe, arguments):
     return argv, RuntimeMount(wrapped, 3)
 
 
-def bind_profiles(registry, references, bundle: RuntimeBundle, interpreter, script_path, arguments):
+def bind_profiles(registry, references, bundle: RuntimeBundle, interpreter, script_path, arguments, *, retain_outputs=False):
     """Return argv/mount for the existing admitted command and OS boundary."""
     recipe = resolve_profiles(registry, references)
     if any(path.casefold().split("/")[0] == RESERVED_DIRECTORY.casefold()
@@ -194,4 +196,4 @@ def bind_profiles(registry, references, bundle: RuntimeBundle, interpreter, scri
         raise SandboxValidationError("Declared Skill environments require a Python, Node or shell interpreter without custom flags")
     mode = "python" if interpreter[0].lower() in PYTHON_NAMES else interpreter[0].lower().removesuffix('.exe')
     recipe.update(mode=mode, script_path=script_path)
-    return _wrap_profile(bundle, recipe, arguments)
+    return _wrap_profile(bundle, recipe, arguments, retain_outputs)

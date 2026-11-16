@@ -44,7 +44,7 @@ async def test_ready_advice_previews_the_same_checkpoint_without_committing_it()
     assert '"structure_path": "cnt.extxyz"' in advice
     assert e.workflow.snapshot() == before and not e.workflow.checkpoints
     e.steps.available = True
-    e.output_recoveries["structure_builder"] = 1
+    assert e.claim_output_recovery("structure_builder")
     request = SimpleNamespace(contents=[], config=types.GenerateContentConfig(max_output_tokens=81920))
     e.actions.prepare(e, "structure_builder", request, None)
     assert "Call advance_modelling_stage" in e.actions.last_action

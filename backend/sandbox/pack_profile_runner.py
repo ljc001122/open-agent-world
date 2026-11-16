@@ -379,6 +379,9 @@ def execute(recipe, package):
         verify_imports(python, recipe, environment)
     else:
         python, environment = prepare(recipe)
+    command_id = recipe.get("command_id")
+    if recipe.get("retain_outputs") and command_id and re.fullmatch(r"[a-f0-9]{32}", command_id):
+        environment["OAW_COMMAND_OUTPUTS"] = ".oaw-command-output-" + command_id
     if recipe['mode'] == 'command':
         return subprocess.call([str(item) for item in command_in_profile(sys.argv[2:], python, environment)],
                                env=environment, stdin=subprocess.DEVNULL)
